@@ -63,7 +63,7 @@ int parse_arguments(char *command, char *argv[], int max_args)
     return argc;
 }
 
-void execute_command(void)
+/*void execute_command(void)
 {
     input[input_length] = '\0';
 
@@ -176,4 +176,124 @@ void execute_command(void)
 
         gui_draw();
     }
+}*/
+
+
+void execute_command(void)
+{
+    input[input_length] = '\0';
+
+    if (input_length == 0)
+        return;
+
+    TerminalTab *tab = &tabs[active_tab];
+
+    if (tab->process_running)
+    {
+        append_output("A command is already running in this tab.\n", 42);
+        gui_draw();
+        return;
+    }
+
+    char command[INPUT_SIZE];
+    strcpy(command, input);
+
+    append_output("$ ", 2);
+    append_output(command, (int)strlen(command));
+    append_output("\n", 1);
+
+    input_length = 0;
+    input[0] = '\0';
+
+    char expanded[INPUT_SIZE];
+    expand_variables(command, expanded, sizeof(expanded), active_tab);
+    strcpy(command, expanded);
+
+    if (handle_assignment(command, active_tab))
+    {
+        tab->last_status = 0;
+        gui_draw();
+        return;
+    }
+
+    char *argv[64];
+    int argc = parse_arguments(command, argv, 64);
+
+    if (argc == 0)
+    {
+        gui_draw();
+        return;
+    }
+
+    if (strcmp(argv[0], "exit") == 0)
+    {
+        gui_close_tab();
+        return;
+    }
+
+    if (strcmp(argv[0], "cd") == 0)
+    {
+        const char *path = argc == 1 ? getenv("HOME") : argv[1];
+
+        if (path == NULL || chdir(path) != 0)
+        {
+            append_output("cd: unable to change directory\n", 31);
+            tab->last_status = 1;
+        }
+        else
+        {
+            tab->last_status = 0;
+        }
+
+        gui_draw();
+        return;
+    }
+
+    int fd[2];
+
+    if (pipe(fd) == -1)
+    {
+        append_output("terminator: pipe failed\n", 23);
+        tab->last_status = 1;
+        gui_draw();
+        return;
+    }
+
+    pid_t pid = fork();
+
+    if (pid == -1)
+    {
+        close(fd[0]);
+        close(fd[1]);
+
+        append_output("terminator: fork failed\n", 23);
+        tab->last_status = 1;
+        gui_draw();
+        return;
+    }
+
+    if (pid == 0)
+    {
+        close(fd[0]);
+
+        dup2(fd[1], STDOUT_FILENO);
+        dup2(fd[1], STDERR_FILENO);
+        close(fd[1]);
+
+        execvp(argv[0], argv);
+
+        dprintf(STDERR_FILENO,
+                "terminator: %s: command not found\n", argv[0]);
+        _exit(127);
+    }
+
+    close(fd[1]);
+
+    tab->pid = pid;
+    tab->output_fd = fd[0];
+    tab->process_running = 1;
+    tab->last_status = 0;
+
+    gui_draw();
 }
+

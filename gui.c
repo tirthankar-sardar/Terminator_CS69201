@@ -80,7 +80,7 @@ void gui_draw(void)
     XDrawString(display, window, gc, x, y, "$ ", 2);
     XDrawString(display, window, gc, x + 20, y, input, input_length);
     XFlush(display);
-} 
+}
 // this fucntion is without scroll, so we will implement a new function with scroll
 
 void gui_draw(void)
@@ -154,7 +154,6 @@ void gui_cleanup(void)
         XCloseDisplay(display);
     }
 }*/
-
 
 #include <string.h>
 #include <stdio.h>
@@ -241,16 +240,14 @@ int gui_init(void)
         RootWindow(display, screen),
         100, 100, 700, 450, 1,
         BlackPixel(display, screen),
-        WhitePixel(display, screen)
-    );
+        WhitePixel(display, screen));
 
     XStoreName(display, window, "Terminator");
 
     XSelectInput(
         display,
         window,
-        ExposureMask | KeyPressMask | ButtonPressMask
-    );
+        ExposureMask | KeyPressMask | ButtonPressMask);
 
     gc = DefaultGC(display, screen);
 
@@ -258,12 +255,18 @@ int gui_init(void)
     memset(input, 0, INPUT_SIZE);
     memset(output, 0, OUTPUT_SIZE);
 
+    tabs[0].pid = 0;
+    tabs[0].output_fd = -1;
+    tabs[0].process_running = 0;
+    tabs[0].last_status = 0;
+
     input_length = 0;
     output_length = 0;
     tab_count = 1;
     active_tab = 0;
 
     XMapWindow(display, window);
+    XFlush(display);
     return 1;
 }
 
@@ -286,8 +289,7 @@ void gui_draw(void)
 
         XDrawRectangle(
             display, window, gc,
-            x, 0, TAB_WIDTH - 1, TAB_HEIGHT
-        );
+            x, 0, TAB_WIDTH - 1, TAB_HEIGHT);
 
         char label[32];
         snprintf(label, sizeof(label), "Tab %d", i + 1);
@@ -295,16 +297,14 @@ void gui_draw(void)
         XDrawString(
             display, window, gc,
             x + 10, 20,
-            label, (int)strlen(label)
-        );
+            label, (int)strlen(label));
 
         if (i == active_tab)
         {
             XDrawLine(
                 display, window, gc,
                 x + 2, TAB_HEIGHT - 2,
-                x + TAB_WIDTH - 3, TAB_HEIGHT - 2
-            );
+                x + TAB_WIDTH - 3, TAB_HEIGHT - 2);
         }
     }
 
@@ -314,8 +314,7 @@ void gui_draw(void)
 
         XDrawRectangle(
             display, window, gc,
-            x, 0, TAB_WIDTH - 1, TAB_HEIGHT
-        );
+            x, 0, TAB_WIDTH - 1, TAB_HEIGHT);
 
         XDrawString(display, window, gc, x + 10, 20, "+", 1);
     }
@@ -374,8 +373,7 @@ void gui_draw(void)
             XDrawString(
                 display, window, gc,
                 x, first_y + row * line_height,
-                output + start, length
-            );
+                output + start, length);
         }
 
         row++;
@@ -386,8 +384,7 @@ void gui_draw(void)
     XDrawString(
         display, window, gc,
         x + 20, prompt_y,
-        input, input_length
-    );
+        input, input_length);
 
     XFlush(display);
 }
@@ -425,6 +422,13 @@ void gui_new_tab(void)
 
     active_tab = tab_count;
     memset(&tabs[active_tab], 0, sizeof(TerminalTab));
+    tabs[tab_count] = (TerminalTab){0};
+
+    tabs[tab_count].pid = 0;
+    tabs[tab_count].output_fd = -1;
+    tabs[tab_count].process_running = 0;
+    tabs[tab_count].last_status = 0;
+
     tab_count++;
 
     load_active_tab();
@@ -435,13 +439,7 @@ void gui_close_tab(void)
 {
     if (tab_count <= 1)
     {
-        input[0] = '\0';
-        input_length = 0;
-        output[0] = '\0';
-        output_length = 0;
-        tabs[0].scroll_offset = 0;
-        save_active_tab();
-        gui_draw();
+        running = 0;
         return;
     }
 
@@ -481,4 +479,3 @@ void gui_cleanup(void)
         display = NULL;
     }
 }
-

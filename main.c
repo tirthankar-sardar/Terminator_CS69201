@@ -536,7 +536,7 @@ int main()
     XCloseDisplay(display);
 
     return 0;
-} */
+}
 
 #include <stdio.h>
 #include <X11/Xlib.h>
@@ -579,5 +579,167 @@ int main(void)
 
     gui_cleanup();
 
+    return 0;
+} */
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <poll.h>
+#include <errno.h>
+#include <sys/wait.h>
+#include <X11/Xlib.h>
+#include <string.h>
+#include "terminal.h"
+#include "gui.h"
+#include "input.h"
+#include "scroll.h"
+
+int running = 1;
+
+static void read_tab_output(int index)
+{
+    TerminalTab *tab = &tabs[index];
+    char buffer[1024];
+
+    ssize_t n = read(tab->output_fd, buffer, sizeof(buffer));
+
+    if (n > 0)
+    {
+        if (index == active_tab)
+        {
+            append_output(buffer, (int)n);
+        }
+        else
+        {
+            int available = OUTPUT_SIZE - 1 - tab->output_length;
+
+            if (available > 0)
+            {
+                int copy = n < available ? (int)n : available;
+
+                memcpy(tab->output + tab->output_length, buffer, copy);
+                tab->output_length += copy;
+                tab->output[tab->output_length] = '\0';
+            }
+        }
+
+        if (index == active_tab)
+            gui_draw();
+
+        return;
+    }
+
+    if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR))
+    {
+        close(tab->output_fd);
+        tab->output_fd = -1;
+
+        int status;
+        pid_t result = waitpid(tab->pid, &status, WNOHANG);
+
+        if (result == tab->pid)
+        {
+            if (WIFEXITED(status))
+                tab->last_status = WEXITSTATUS(status);
+            else if (WIFSIGNALED(status))
+                tab->last_status = 128 + WTERMSIG(status);
+        }
+
+        tab->process_running = 0;
+        tab->pid = 0;
+
+        if (index == active_tab)
+            gui_draw();
+    }
+}
+
+int main(void)
+{
+
+
+    fprintf(stderr, "Starting Terminator...\n");
+    fflush(stderr);
+
+    if (!gui_init()) {
+        fprintf(stderr, "gui_init() failed\n");
+        return 1;
+    }
+
+    fprintf(stderr, "GUI initialized successfully\n");
+    fflush(stderr);
+
+    input[0] = '\0';
+
+
+
+
+    if (!gui_init())
+        return 1;
+
+    input[0] = '\0';
+
+    while (running)
+    {
+        struct pollfd fds[MAX_TABS + 1];
+        int tab_indices[MAX_TABS + 1];
+        int count = 1;
+
+        fds[0].fd = ConnectionNumber(display);
+        fds[0].events = POLLIN;
+        fds[0].revents = 0;
+        tab_indices[0] = -1;
+
+        for (int i = 0; i < tab_count; i++)
+        {
+            if (tabs[i].process_running && tabs[i].output_fd >= 0)
+            {
+                fds[count].fd = tabs[i].output_fd;
+                fds[count].events = POLLIN | POLLHUP;
+                fds[count].revents = 0;
+                tab_indices[count] = i;
+                count++;
+            }
+        }
+
+        int result = poll(fds, count, -1);
+
+        if (result < 0)
+        {
+            if (errno == EINTR)
+                continue;
+
+            perror("poll");
+            break;
+        }
+
+        if (fds[0].revents & (POLLIN | POLLERR | POLLHUP))
+        {
+            while (XPending(display))
+            {
+                XEvent event;
+                XNextEvent(display, &event);
+
+                if (event.type == Expose)
+                    gui_draw();
+                else if (event.type == KeyPress)
+                {
+                    if (!handle_scroll_event(&event))
+                        handle_keypress(&event.xkey);
+                }
+                else if (event.type == ButtonPress)
+                    gui_handle_button(&event.xbutton);
+            }
+        }
+
+        for (int i = 1; i < count; i++)
+        {
+            if (fds[i].revents & (POLLIN | POLLHUP | POLLERR))
+                read_tab_output(tab_indices[i]);
+        }
+    }
+
+    gui_cleanup();
     return 0;
 }

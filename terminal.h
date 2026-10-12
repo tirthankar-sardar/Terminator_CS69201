@@ -3,10 +3,12 @@
 #define TERMINAL_H
 
 #include <X11/Xlib.h>
+#include <sys/types.h>
 
 #define INPUT_SIZE 256
 #define OUTPUT_SIZE 32768
 #define MAX_TABS 8
+
 
 typedef struct
 {
@@ -17,7 +19,13 @@ typedef struct
     int output_length;
 
     int scroll_offset;
+
+    pid_t pid;
+    int output_fd;
+    int process_running;
+    int last_status;
 } TerminalTab;
+
 
 extern Display *display;
 extern Window window;
