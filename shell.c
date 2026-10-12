@@ -81,11 +81,13 @@ void execute_command(void)
     input[0] = '\0';
 
     // vriables expansion
+
     char expanded[INPUT_SIZE];
-    expand_variables(command, expanded, sizeof(expanded));
+
+    expand_variables(command, expanded, sizeof(expanded), active_tab);
     strcpy(command, expanded);
 
-    if (handle_assignment(command))
+    if (handle_assignment(command, active_tab))
         return;
 
     char *argv[64];
