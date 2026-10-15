@@ -4,6 +4,7 @@
 
 #include <X11/Xlib.h>
 #include <sys/types.h>
+#include <limits.h>
 
 #define INPUT_SIZE 256
 #define OUTPUT_SIZE 32768
@@ -19,6 +20,7 @@ typedef struct
     int output_length;
 
     int scroll_offset;
+    char cwd[PATH_MAX];
 
     pid_t pid;
     int output_fd;

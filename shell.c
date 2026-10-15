@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include "terminal.h"
@@ -178,7 +180,6 @@ int parse_arguments(char *command, char *argv[], int max_args)
     }
 }*/
 
-
 void execute_command(void)
 {
     input[input_length] = '\0';
@@ -231,7 +232,7 @@ void execute_command(void)
         return;
     }
 
-    if (strcmp(argv[0], "cd") == 0)
+    /*if (strcmp(argv[0], "cd") == 0)
     {
         const char *path = argc == 1 ? getenv("HOME") : argv[1];
 
@@ -243,6 +244,43 @@ void execute_command(void)
         else
         {
             tab->last_status = 0;
+        }
+
+        gui_draw();
+        return;
+    }*/
+    if (strcmp(argv[0], "cd") == 0)
+    {
+        const char *path = argc == 1 ? getenv("HOME") : argv[1];
+        char new_path[PATH_MAX];
+        char resolved_path[PATH_MAX];
+        struct stat st;
+
+        if (path == NULL)
+        {
+            append_output("cd: HOME not set\n", 17);
+            tab->last_status = 1;
+        }
+        else
+        {
+            if (path[0] == '/')
+                snprintf(new_path, sizeof(new_path), "%s", path);
+            else
+                snprintf(new_path, sizeof(new_path), "%s/%s",
+                         tab->cwd, path);
+
+            if (realpath(new_path, resolved_path) == NULL ||
+                stat(resolved_path, &st) != 0 ||
+                !S_ISDIR(st.st_mode))
+            {
+                append_output("cd: unable to change directory\n", 31);
+                tab->last_status = 1;
+            }
+            else
+            {
+                snprintf(tab->cwd, sizeof(tab->cwd), "%s", resolved_path);
+                tab->last_status = 0;
+            }
         }
 
         gui_draw();
@@ -280,6 +318,15 @@ void execute_command(void)
         dup2(fd[1], STDERR_FILENO);
         close(fd[1]);
 
+        //execvp(argv[0], argv);
+
+        if (chdir(tab->cwd) != 0)
+        {
+            dprintf(STDERR_FILENO,
+                    "terminator: cannot change directory\n");
+            _exit(126);
+        }
+
         execvp(argv[0], argv);
 
         dprintf(STDERR_FILENO,
@@ -296,4 +343,3 @@ void execute_command(void)
 
     gui_draw();
 }
-

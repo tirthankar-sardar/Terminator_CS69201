@@ -157,6 +157,7 @@ void gui_cleanup(void)
 
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <X11/Xlib.h>
 #include "terminal.h"
 #include "gui.h"
@@ -264,6 +265,9 @@ int gui_init(void)
     output_length = 0;
     tab_count = 1;
     active_tab = 0;
+
+    if (getcwd(tabs[0].cwd, sizeof(tabs[0].cwd)) == NULL)
+    snprintf(tabs[0].cwd, sizeof(tabs[0].cwd), "/");
 
     XMapWindow(display, window);
     XFlush(display);
@@ -413,7 +417,7 @@ void gui_switch_tab(int index)
     gui_draw();
 }
 
-void gui_new_tab(void)
+/*void gui_new_tab(void)
 {
     if (tab_count >= MAX_TABS)
         return;
@@ -433,7 +437,37 @@ void gui_new_tab(void)
 
     load_active_tab();
     gui_draw();
+}*/
+
+void gui_new_tab(void)
+{
+    if (tab_count >= MAX_TABS)
+        return;
+
+    char initial_cwd[PATH_MAX];
+
+    snprintf(initial_cwd, sizeof(initial_cwd), "%s",
+             tabs[active_tab].cwd);
+
+    save_active_tab();
+
+    active_tab = tab_count;
+    memset(&tabs[active_tab], 0, sizeof(TerminalTab));
+
+    snprintf(tabs[active_tab].cwd, sizeof(tabs[active_tab].cwd),
+             "%s", initial_cwd);
+
+    tabs[active_tab].pid = 0;
+    tabs[active_tab].output_fd = -1;
+    tabs[active_tab].process_running = 0;
+    tabs[active_tab].last_status = 0;
+
+    tab_count++;
+
+    load_active_tab();
+    gui_draw();
 }
+
 
 void gui_close_tab(void)
 {
@@ -449,6 +483,7 @@ void gui_close_tab(void)
         tabs[i] = tabs[i + 1];
 
     tab_count--;
+    getcwd(tabs[active_tab].cwd, sizeof(tabs[active_tab].cwd));
 
     if (active_tab >= tab_count)
         active_tab = tab_count - 1;
