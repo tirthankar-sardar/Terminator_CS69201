@@ -267,7 +267,7 @@ int gui_init(void)
     active_tab = 0;
 
     if (getcwd(tabs[0].cwd, sizeof(tabs[0].cwd)) == NULL)
-    snprintf(tabs[0].cwd, sizeof(tabs[0].cwd), "/");
+        snprintf(tabs[0].cwd, sizeof(tabs[0].cwd), "/");
 
     XMapWindow(display, window);
     XFlush(display);
@@ -327,7 +327,21 @@ void gui_draw(void)
     int x = 15;
     int line_height = 18;
     int first_y = TAB_HEIGHT + 20;
-    int prompt_y = attributes.height - 15;
+
+    /* Count the number of input lines */
+    int input_line_count = 1;
+
+    for (int i = 0; i < input_length; i++)
+    {
+        if (input[i] == '\n')
+            input_line_count++;
+    }
+
+    /* Move the prompt upward to make room for multiline input */
+    int prompt_y = attributes.height - 15 - (input_line_count - 1) * line_height;
+
+    if (prompt_y < first_y + 15)
+        prompt_y = first_y + 15;
 
     int visible_lines = (prompt_y - first_y) / line_height;
 
@@ -384,13 +398,58 @@ void gui_draw(void)
     }
 
     /* Draw prompt and input */
-    XDrawString(display, window, gc, x, prompt_y, "$ ", 2);
-    XDrawString(
-        display, window, gc,
-        x + 20, prompt_y,
-        input, input_length);
+    // XDrawString(display, window, gc, x, prompt_y, "$ ", 2);
+    // XDrawString(
+    //     display, window, gc,
+    //     x + 20, prompt_y,
+    //     input, input_length);
 
-    XFlush(display);
+    // XFlush(display);
+
+    /* Draw prompt and multiline input */
+    int input_x = x;
+    int input_y = prompt_y;
+    int start = 0;
+
+    int input_line_height = line_height;
+    int prompt_width = 20;
+
+    const char *prompt =
+        tabs[active_tab].continuation_mode ? "> " : "$ ";
+
+    XDrawString(display, window, gc, input_x, input_y, prompt, 2);
+    input_x += prompt_width;
+
+    for (int i = 0; i <= input_length; i++)
+    {
+        if (input[i] == '\n' || input[i] == '\0')
+        {
+            if (i > start)
+            {
+                XDrawString(
+                    display, window, gc,
+                    input_x, input_y,
+                    input + start, i - start);
+            }
+
+            if (input[i] == '\n')
+            {
+                input_y += input_line_height;
+                start = i + 1;
+                input_x = x;
+
+                XDrawString(
+                    display, window, gc,
+                    input_x, input_y, "> ", 2);
+
+                input_x += prompt_width;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
 }
 
 void gui_scroll(int lines)
@@ -467,7 +526,6 @@ void gui_new_tab(void)
     load_active_tab();
     gui_draw();
 }
-
 
 void gui_close_tab(void)
 {

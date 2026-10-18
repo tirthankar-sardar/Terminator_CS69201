@@ -180,6 +180,48 @@ int parse_arguments(char *command, char *argv[], int max_args)
     }
 }*/
 
+int command_needs_more_input(const char *command)
+{
+    char quote = '\0';
+
+    for (int i = 0; command[i] != '\0'; i++)
+    {
+        char c = command[i];
+
+        if (c == '\\' && quote != '\'')
+        {
+            if (command[i + 1] == '\0')
+                return 1;
+
+            i++;
+            continue;
+        }
+
+        if (quote == '\'')
+        {
+            if (c == '\'')
+                quote = '\0';
+            continue;
+        }
+
+        if (c == '\'' && quote == '\0')
+        {
+            quote = '\'';
+            continue;
+        }
+
+        if (c == '"')
+        {
+            if (quote == '"')
+                quote = '\0';
+            else if (quote == '\0')
+                quote = '"';
+        }
+    }
+
+    return quote != '\0';
+}
+
 void execute_command(void)
 {
     input[input_length] = '\0';
@@ -318,7 +360,7 @@ void execute_command(void)
         dup2(fd[1], STDERR_FILENO);
         close(fd[1]);
 
-        //execvp(argv[0], argv);
+        // execvp(argv[0], argv);
 
         if (chdir(tab->cwd) != 0)
         {

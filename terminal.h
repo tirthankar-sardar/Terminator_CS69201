@@ -10,7 +10,6 @@
 #define OUTPUT_SIZE 32768
 #define MAX_TABS 8
 
-
 typedef struct
 {
     char input[INPUT_SIZE];
@@ -19,6 +18,7 @@ typedef struct
     char output[OUTPUT_SIZE];
     int output_length;
 
+    int continuation_mode;
     int scroll_offset;
     char cwd[PATH_MAX];
 
@@ -27,7 +27,6 @@ typedef struct
     int process_running;
     int last_status;
 } TerminalTab;
-
 
 extern Display *display;
 extern Window window;

@@ -37,14 +37,38 @@ void handle_keypress(XKeyEvent *event)
 
         gui_draw();
     }
+    // else if (key == XK_Return || key == XK_KP_Enter)
+    // {
+    //     execute_command();
+    //     input_length = 0;
+    //     input[0] = '\0';
+
+    //     gui_draw();
+    // }
+
     else if (key == XK_Return || key == XK_KP_Enter)
     {
-        execute_command();
-        input_length = 0;
-        input[0] = '\0';
+        input[input_length] = '\0';
+
+        if (command_needs_more_input(input))
+        {
+            if (input_length + 1 < INPUT_SIZE)
+            {
+                input[input_length++] = '\n';
+                input[input_length] = '\0';
+
+                tabs[active_tab].continuation_mode = 1;
+            }
+        }
+        else
+        {
+            tabs[active_tab].continuation_mode = 0;
+            execute_command();
+        }
 
         gui_draw();
     }
+
     else if (length > 0)
     {
         if (input_length + length < INPUT_SIZE)
