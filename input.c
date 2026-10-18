@@ -50,13 +50,23 @@ void handle_keypress(XKeyEvent *event)
     {
         input[input_length] = '\0';
 
-        if (command_needs_more_input(input))
+        int backslashes = 0;
+
+        for (int i = input_length - 1;
+             i >= 0 && input[i] == '\\';
+             i--)
+        {
+            backslashes++;
+        }
+
+        int trailing_backslash = (backslashes % 2 == 1);
+
+        if (trailing_backslash || command_needs_more_input(input))
         {
             if (input_length + 1 < INPUT_SIZE)
             {
                 input[input_length++] = '\n';
                 input[input_length] = '\0';
-
                 tabs[active_tab].continuation_mode = 1;
             }
         }

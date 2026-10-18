@@ -8,13 +8,20 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include "io_redirect.h"
 #include "terminal.h"
 #include "shell.h"
 #include "gui.h"
 #include "variables.h"
 
+
 int parse_arguments(char *command, char *argv[], int max_args)
 {
+    static char storage[INPUT_SIZE];
+
     int argc = 0;
     int i = 0;
     int j = 0;
@@ -30,16 +37,27 @@ int parse_arguments(char *command, char *argv[], int max_args)
         if (argc >= max_args - 1)
             break;
 
-        argv[argc++] = &command[j];
+        if (command[i] == '<' || command[i] == '>')
+        {
+            argv[argc++] = &storage[j];
+            storage[j++] = command[i++];
+            storage[j++] = '\0';
+            continue;
+        }
+
+        argv[argc++] = &storage[j];
 
         char quote = '\0';
 
         while (command[i] != '\0')
         {
-            char c = command[i++];
+            char c = command[i];
 
-            if (quote == '\0' && (c == ' ' || c == '\t'))
+            if (quote == '\0' &&
+                (c == ' ' || c == '\t' || c == '<' || c == '>'))
                 break;
+
+            i++;
 
             if (c == '\'' || c == '"')
             {
@@ -55,15 +73,16 @@ int parse_arguments(char *command, char *argv[], int max_args)
                 }
             }
 
-            command[j++] = c;
+            storage[j++] = c;
         }
 
-        command[j++] = '\0';
+        storage[j++] = '\0';
     }
 
     argv[argc] = NULL;
     return argc;
 }
+
 
 /*void execute_command(void)
 {
@@ -241,6 +260,24 @@ void execute_command(void)
     char command[INPUT_SIZE];
     strcpy(command, input);
 
+    int read_pos = 0;
+    int write_pos = 0;
+
+    while (command[read_pos] != '\0')
+    {
+        if (command[read_pos] == '\\' &&
+            command[read_pos + 1] == '\n')
+        {
+            read_pos += 2;
+        }
+        else
+        {
+            command[write_pos++] = command[read_pos++];
+        }
+    }
+
+    command[write_pos] = '\0';
+
     append_output("$ ", 2);
     append_output(command, (int)strlen(command));
     append_output("\n", 1);
@@ -261,6 +298,12 @@ void execute_command(void)
 
     char *argv[64];
     int argc = parse_arguments(command, argv, 64);
+    dprintf(STDERR_FILENO, "DEBUG argc=%d\n", argc);
+
+    for (int i = 0; i < argc; i++)
+    {
+        dprintf(STDERR_FILENO, "DEBUG argv[%d]=[%s]\n", i, argv[i]);
+    }
 
     if (argc == 0)
     {
@@ -331,6 +374,16 @@ void execute_command(void)
 
     int fd[2];
 
+    IORedirection redirect;
+
+    if (parse_redirections(argv, &redirect) != 0 || argv[0] == NULL)
+    {
+        append_output("terminator: invalid redirection\n", 32);
+        tab->last_status = 2;
+        gui_draw();
+        return;
+    }
+
     if (pipe(fd) == -1)
     {
         append_output("terminator: pipe failed\n", 23);
@@ -369,11 +422,56 @@ void execute_command(void)
             _exit(126);
         }
 
+        int input_fd = -1;
+        int output_fd = -1;
+
+        if (redirect.input_file != NULL)
+        {
+            input_fd = open(redirect.input_file, O_RDONLY);
+
+            if (input_fd == -1)
+            {
+                dprintf(STDERR_FILENO,
+                        "terminator: cannot open input file: %s\n",
+                        redirect.input_file);
+                _exit(1);
+            }
+
+            if (dup2(input_fd, STDIN_FILENO) == -1)
+                _exit(1);
+
+            close(input_fd);
+        }
+
+        if (redirect.output_file != NULL)
+        {
+            output_fd = open(redirect.output_file,
+                             O_WRONLY | O_CREAT | O_TRUNC,
+                             0644);
+
+            if (output_fd == -1)
+            {
+                dprintf(STDERR_FILENO,
+                        "terminator: cannot open output file: %s\n",
+                        redirect.output_file);
+                _exit(1);
+            }
+
+            if (dup2(output_fd, STDOUT_FILENO) == -1)
+                _exit(1);
+
+            close(output_fd);
+        }
+
         execvp(argv[0], argv);
 
+        int saved_errno = errno;
+
         dprintf(STDERR_FILENO,
-                "terminator: %s: command not found\n", argv[0]);
-        _exit(127);
+                "terminator: %s: %s\n",
+                argv[0], strerror(saved_errno));
+
+        _exit(saved_errno == ENOENT ? 127 : 126);
     }
 
     close(fd[1]);
