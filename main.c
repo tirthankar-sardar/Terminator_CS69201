@@ -582,7 +582,6 @@ int main(void)
     return 0;
 } */
 
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -591,12 +590,41 @@ int main(void)
 #include <sys/wait.h>
 #include <X11/Xlib.h>
 #include <string.h>
+#include <time.h>
 #include "terminal.h"
 #include "gui.h"
 #include "input.h"
 #include "scroll.h"
 
+#define MAX_POLL_FDS (1 + MAX_TABS + MAX_TABS * MAX_WATCH_COMMANDS)
+
 int running = 1;
+
+static void append_tab_output(int index, const char *text, int length)
+{
+    if (length <= 0)
+        return;
+
+    if (index == active_tab)
+    {
+        append_output(text, length);
+        gui_draw();
+        return;
+    }
+
+    TerminalTab *tab = &tabs[index];
+    int available = OUTPUT_SIZE - 1 - tab->output_length;
+
+    if (available <= 0)
+        return;
+
+    if (length > available)
+        length = available;
+
+    memcpy(tab->output + tab->output_length, text, length);
+    tab->output_length += length;
+    tab->output[tab->output_length] = '\0';
+}
 
 static void read_tab_output(int index)
 {
@@ -636,17 +664,27 @@ static void read_tab_output(int index)
         close(tab->output_fd);
         tab->output_fd = -1;
 
-        int status;
-        pid_t result = waitpid(tab->pid, &status, WNOHANG);
-
-        if (result == tab->pid)
+        for (int i = 0; i < tab->child_count; i++)
         {
-            if (WIFEXITED(status))
-                tab->last_status = WEXITSTATUS(status);
-            else if (WIFSIGNALED(status))
-                tab->last_status = 128 + WTERMSIG(status);
+            int status;
+            pid_t child = tab->child_pids[i];
+
+            pid_t result;
+            do
+            {
+                result = waitpid(child, &status, 0);
+            } while (result == -1 && errno == EINTR);
+
+            if (result == child && child == tab->pid)
+            {
+                if (WIFEXITED(status))
+                    tab->last_status = WEXITSTATUS(status);
+                else if (WIFSIGNALED(status))
+                    tab->last_status = 128 + WTERMSIG(status);
+            }
         }
 
+        tab->child_count = 0;
         tab->process_running = 0;
         tab->pid = 0;
 
@@ -655,14 +693,80 @@ static void read_tab_output(int index)
     }
 }
 
+static void read_watch_output(int index, int watch_index)
+{
+    TerminalTab *tab = &tabs[index];
+    WatchCommand *watch = &tab->watch_commands[watch_index];
+
+    if (watch->output_fd < 0)
+        return;
+
+    char buffer[1024];
+    ssize_t n = read(watch->output_fd, buffer, sizeof(buffer));
+
+    if (n > 0)
+    {
+        if (!watch->output_started)
+        {
+            char header[INPUT_SIZE + 64];
+
+            watch->run_timestamp = time(NULL);
+
+            int len = snprintf(
+                header, sizeof(header),
+                "\"%s\", %lld:\n"
+                "----------------------------------------------------\n",
+                watch->command,
+                (long long)watch->run_timestamp);
+
+            append_tab_output(index, header, len);
+            watch->output_started = 1;
+        }
+
+        append_tab_output(index, buffer, (int)n);
+        return;
+    }
+
+    if (n < 0 && (errno == EAGAIN || errno == EINTR))
+        return;
+
+    close(watch->output_fd);
+    watch->output_fd = -1;
+
+    if (watch->output_started)
+    {
+        const char *separator =
+            "\n----------------------------------------------------\n";
+
+        append_tab_output(index, separator, (int)strlen(separator));
+    }
+
+    for (int i = 0; i < watch->child_count; i++)
+    {
+        int status;
+        pid_t child = watch->child_pids[i];
+
+        while (waitpid(child, &status, 0) == -1 && errno == EINTR)
+        {
+        }
+    }
+
+    watch->child_count = 0;
+    watch->running = 0;
+    watch->output_started = 0;
+
+    if (index == active_tab)
+        gui_draw();
+}
+
 int main(void)
 {
-
 
     fprintf(stderr, "Starting Terminator...\n");
     fflush(stderr);
 
-    if (!gui_init()) {
+    if (!gui_init())
+    {
         fprintf(stderr, "gui_init() failed\n");
         return 1;
     }
@@ -672,34 +776,60 @@ int main(void)
 
     input[0] = '\0';
 
+    // if (!gui_init())
+    //     return 1;
 
-
-
-    if (!gui_init())
-        return 1;
-
-    input[0] = '\0';
+    // input[0] = '\0';
 
     while (running)
     {
-        struct pollfd fds[MAX_TABS + 1];
-        int tab_indices[MAX_TABS + 1];
+
+        struct pollfd fds[MAX_POLL_FDS];
+        int tab_indices[MAX_POLL_FDS];
+        int watch_indices[MAX_POLL_FDS];
+
         int count = 1;
 
         fds[0].fd = ConnectionNumber(display);
         fds[0].events = POLLIN;
         fds[0].revents = 0;
+
         tab_indices[0] = -1;
+        watch_indices[0] = -1;
 
         for (int i = 0; i < tab_count; i++)
         {
             if (tabs[i].process_running && tabs[i].output_fd >= 0)
             {
                 fds[count].fd = tabs[i].output_fd;
-                fds[count].events = POLLIN | POLLHUP;
+                fds[count].events = POLLIN | POLLHUP | POLLERR;
                 fds[count].revents = 0;
+
                 tab_indices[count] = i;
+                watch_indices[count] = -1;
+
                 count++;
+            }
+        }
+
+        /* Add multiWatch output pipes. */
+        for (int i = 0; i < tab_count; i++)
+        {
+            for (int j = 0; j < tabs[i].watch_command_count; j++)
+            {
+                WatchCommand *watch = &tabs[i].watch_commands[j];
+
+                if (watch->running && watch->output_fd >= 0)
+                {
+                    fds[count].fd = watch->output_fd;
+                    fds[count].events = POLLIN | POLLHUP | POLLERR;
+                    fds[count].revents = 0;
+
+                    tab_indices[count] = i;
+                    watch_indices[count] = j;
+
+                    count++;
+                }
             }
         }
 
@@ -736,7 +866,12 @@ int main(void)
         for (int i = 1; i < count; i++)
         {
             if (fds[i].revents & (POLLIN | POLLHUP | POLLERR))
-                read_tab_output(tab_indices[i]);
+            {
+                if (watch_indices[i] >= 0)
+                    read_watch_output(tab_indices[i], watch_indices[i]);
+                else
+                    read_tab_output(tab_indices[i]);
+            }
         }
     }
 
