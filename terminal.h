@@ -14,6 +14,7 @@
 
 #define MAX_WATCH_COMMANDS 8
 #define WATCH_INTERVAL 2
+#define MAX_JOBS 64
 
 typedef struct
 {
@@ -35,6 +36,7 @@ typedef struct
 {
     char input[INPUT_SIZE];
     int input_length;
+    int input_cursor;
 
     char output[OUTPUT_SIZE];
     int output_length;
@@ -49,6 +51,7 @@ typedef struct
     // int last_status;
 
     pid_t pid;
+    pid_t foreground_pgid;
     pid_t child_pids[MAX_PIPE_COMMANDS];
     int child_count;
 

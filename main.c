@@ -852,14 +852,26 @@ int main(void)
                 XNextEvent(display, &event);
 
                 if (event.type == Expose)
+                {
                     gui_draw();
+                }
                 else if (event.type == KeyPress)
                 {
                     if (!handle_scroll_event(&event))
                         handle_keypress(&event.xkey);
                 }
+                else if (event.type == SelectionRequest)
+                {
+                    handle_selection_request(&event.xselectionrequest);
+                }
+                else if (event.type == SelectionNotify)
+                {
+                    handle_selection_notify(&event.xselection);
+                }
                 else if (event.type == ButtonPress)
+                {
                     gui_handle_button(&event.xbutton);
+                }
             }
         }
 

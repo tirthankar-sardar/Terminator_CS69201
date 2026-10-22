@@ -175,8 +175,7 @@ int parse_multiwatch(char *command, char commands[][INPUT_SIZE],
     return count;
 }
 
-static int start_watch_command(WatchCommand *watch,
-                               const char *cwd)
+static int start_watch_command(WatchCommand *watch, const char *cwd)
 {
     int fd[2];
 
@@ -198,6 +197,8 @@ static int start_watch_command(WatchCommand *watch,
 
     if (pid == 0)
     {
+        setpgid(0, 0);
+
         close(fd[0]);
 
         if (dup2(fd[1], STDOUT_FILENO) == -1 ||
@@ -218,6 +219,8 @@ static int start_watch_command(WatchCommand *watch,
         perror("multiWatch: exec");
         _exit(127);
     }
+
+    setpgid(pid, pid);
 
     close(fd[1]);
 
@@ -285,6 +288,54 @@ static void start_multiwatch(char commands[][INPUT_SIZE],
     }
 
     append_output("multiWatch started.\n", 20);
+    gui_draw();
+}
+
+void stop_multiwatch(TerminalTab *tab)
+{
+    if (!tab->multiwatch_active)
+        return;
+
+    tab->multiwatch_active = 0;
+
+    for (int i = 0; i < tab->watch_command_count; i++)
+    {
+        WatchCommand *watch = &tab->watch_commands[i];
+
+        if (watch->running && watch->child_count > 0)
+        {
+            kill(-watch->child_pids[0], SIGTERM);
+        }
+    }
+
+    for (int i = 0; i < tab->watch_command_count; i++)
+    {
+        WatchCommand *watch = &tab->watch_commands[i];
+
+        if (watch->output_fd >= 0)
+        {
+            close(watch->output_fd);
+            watch->output_fd = -1;
+        }
+
+        for (int j = 0; j < watch->child_count; j++)
+        {
+            int status;
+            pid_t pid = watch->child_pids[j];
+
+            while (waitpid(pid, &status, 0) == -1 && errno == EINTR)
+            {
+            }
+        }
+
+        watch->child_count = 0;
+        watch->running = 0;
+        watch->output_started = 0;
+    }
+
+    tab->watch_command_count = 0;
+
+    append_output("\n^C\n", 4);
     gui_draw();
 }
 
@@ -517,6 +568,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
     }
 
     pid_t children[MAX_PIPE_COMMANDS];
+    pid_t pgid = 0;
     int started = 0;
 
     /* Start one child for every command. */
@@ -532,6 +584,11 @@ static void execute_pipeline(char *command, TerminalTab *tab)
 
         if (pid == 0)
         {
+
+            pid_t child_pgid = (pgid == 0) ? getpid() : pgid;
+
+            if (setpgid(0, child_pgid) == -1)
+                _exit(126);
             /* Read from the previous command. */
             if (i > 0 &&
                 dup2(pipes[i - 1][0], STDIN_FILENO) == -1)
@@ -621,6 +678,14 @@ static void execute_pipeline(char *command, TerminalTab *tab)
             _exit(saved_errno == ENOENT ? 127 : 126);
         }
 
+        if (pgid == 0)
+            pgid = pid;
+
+        if (setpgid(pid, pgid) == -1 && errno != EACCES && errno != ESRCH)
+        {
+            perror("setpgid");
+        }
+
         children[started++] = pid;
     }
 
@@ -648,6 +713,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
         tab->child_pids[i] = children[i];
 
     tab->pid = children[started - 1];
+    tab->foreground_pgid = pgid;
     tab->output_fd = capture[0];
     tab->process_running = 1;
     tab->last_status = 0;

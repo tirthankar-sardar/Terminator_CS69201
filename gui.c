@@ -159,8 +159,11 @@ void gui_cleanup(void)
 #include <stdio.h>
 #include <unistd.h>
 #include <X11/Xlib.h>
+#include "hotkeys.h"
 #include "terminal.h"
 #include "gui.h"
+
+XFontStruct *font_info;
 
 Display *display;
 Window window;
@@ -185,6 +188,7 @@ static void save_active_tab(void)
 
     memcpy(tab->input, input, INPUT_SIZE);
     tab->input_length = input_length;
+    tab->input_cursor = input_cursor;
 
     memcpy(tab->output, output, OUTPUT_SIZE);
     tab->output_length = output_length;
@@ -199,6 +203,7 @@ static void load_active_tab(void)
 
     memcpy(input, tab->input, INPUT_SIZE);
     input_length = tab->input_length;
+    input_cursor = tab->input_cursor;
 
     memcpy(output, tab->output, OUTPUT_SIZE);
     output_length = tab->output_length;
@@ -252,6 +257,8 @@ int gui_init(void)
 
     gc = DefaultGC(display, screen);
 
+    font_info = XQueryFont(display, XGContextFromGC(gc));
+
     memset(tabs, 0, sizeof(tabs));
     memset(input, 0, INPUT_SIZE);
     memset(output, 0, OUTPUT_SIZE);
@@ -262,6 +269,7 @@ int gui_init(void)
     tabs[0].last_status = 0;
 
     input_length = 0;
+    input_cursor = 0;
     output_length = 0;
     tab_count = 1;
     active_tab = 0;
@@ -407,12 +415,59 @@ void gui_draw(void)
     // XFlush(display);
 
     /* Draw prompt and multiline input */
+    // int input_x = x;
+    // int input_y = prompt_y;
+    // int start = 0;
+
+    // int input_line_height = line_height;
+    // int prompt_width = 20;
+
+    // const char *prompt =
+    //     tabs[active_tab].continuation_mode ? "> " : "$ ";
+
+    // XDrawString(display, window, gc, input_x, input_y, prompt, 2);
+    // input_x += prompt_width;
+
+    // for (int i = 0; i <= input_length; i++)
+    // {
+    //     if (input[i] == '\n' || input[i] == '\0')
+    //     {
+    //         if (i > start)
+    //         {
+    //             XDrawString(
+    //                 display, window, gc,
+    //                 input_x, input_y,
+    //                 input + start, i - start);
+    //         }
+
+    //         if (input[i] == '\n')
+    //         {
+    //             input_y += input_line_height;
+    //             start = i + 1;
+    //             input_x = x;
+
+    //             XDrawString(
+    //                 display, window, gc,
+    //                 input_x, input_y, "> ", 2);
+
+    //             input_x += prompt_width;
+    //         }
+    //         else
+    //         {
+    //             break;
+    //         }
+    //     }
+    // }
+
+    /* Draw prompt and multiline input with cursor */
     int input_x = x;
     int input_y = prompt_y;
     int start = 0;
 
     int input_line_height = line_height;
     int prompt_width = 20;
+    int cursor_x = input_x + prompt_width;
+    int cursor_y = input_y;
 
     const char *prompt =
         tabs[active_tab].continuation_mode ? "> " : "$ ";
@@ -422,6 +477,17 @@ void gui_draw(void)
 
     for (int i = 0; i <= input_length; i++)
     {
+        if (i == input_cursor)
+        {
+            cursor_y = input_y;
+            cursor_x = input_x;
+
+            if (i > start)
+            {
+                cursor_x += XTextWidth(font_info, input + start, i - start);
+            }
+        }
+
         if (input[i] == '\n' || input[i] == '\0')
         {
             if (i > start)
@@ -450,6 +516,14 @@ void gui_draw(void)
             }
         }
     }
+
+    /* Draw the visible insertion cursor. */
+    XDrawLine(
+        display, window, gc,
+        cursor_x, cursor_y - 13,
+        cursor_x, cursor_y + 3);
+
+    XFlush(display);
 }
 
 void gui_scroll(int lines)
@@ -513,6 +587,8 @@ void gui_new_tab(void)
     active_tab = tab_count;
     memset(&tabs[active_tab], 0, sizeof(TerminalTab));
 
+    tabs[active_tab].input_cursor = 0;
+
     snprintf(tabs[active_tab].cwd, sizeof(tabs[active_tab].cwd),
              "%s", initial_cwd);
 
@@ -565,6 +641,11 @@ void gui_handle_button(XButtonEvent *event)
 
 void gui_cleanup(void)
 {
+    if (font_info != NULL)
+    {
+        XFreeFontInfo(NULL, font_info, 1);
+        font_info = NULL;
+    }
     if (display != NULL)
     {
         XDestroyWindow(display, window);
