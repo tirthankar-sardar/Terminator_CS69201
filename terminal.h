@@ -32,6 +32,32 @@ typedef struct
     time_t run_timestamp;
 } WatchCommand;
 
+typedef enum
+{
+    JOB_RUNNING,
+    JOB_STOPPED,
+    JOB_DONE
+} JobState;
+
+typedef struct
+{
+    int id;
+    pid_t pgid;
+
+    pid_t child_pids[MAX_PIPE_COMMANDS];
+    int child_count;
+
+    int child_done[MAX_PIPE_COMMANDS];
+    int child_stopped[MAX_PIPE_COMMANDS];
+    int child_status[MAX_PIPE_COMMANDS];
+
+    int output_fd;
+    JobState state;
+    int used;
+
+    char command[INPUT_SIZE];
+} ShellJob;
+
 typedef struct
 {
     char input[INPUT_SIZE];
@@ -52,6 +78,7 @@ typedef struct
 
     pid_t pid;
     pid_t foreground_pgid;
+    int foreground_job_id;
     pid_t child_pids[MAX_PIPE_COMMANDS];
     int child_count;
 
@@ -63,6 +90,11 @@ typedef struct
 
     int watch_command_count;
     WatchCommand watch_commands[MAX_WATCH_COMMANDS];
+
+    char foreground_command[INPUT_SIZE];
+
+    ShellJob jobs[MAX_JOBS];
+    int next_job_id;
 
 } TerminalTab;
 
@@ -90,5 +122,9 @@ void gui_scroll(int lines);
 
 void handle_keypress(XKeyEvent *event);
 void execute_command(void);
+
+void job_control_key(int suspend_job);
+void poll_job_statuses(void);
+void read_job_output(int tab_index, int job_index);
 
 #endif

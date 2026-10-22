@@ -21,6 +21,450 @@
 #include "gui.h"
 #include "variables.h"
 
+/* Find an existing job using its job ID. */
+static ShellJob *find_job(TerminalTab *tab, int id)
+{
+    for (int i = 0; i < MAX_JOBS; i++)
+    {
+        if (tab->jobs[i].used &&
+            tab->jobs[i].id == id &&
+            tab->jobs[i].state != JOB_DONE)
+        {
+            return &tab->jobs[i];
+        }
+    }
+
+    return NULL;
+}
+
+/* Save a process group as a shell job. */
+static ShellJob *add_job(
+    TerminalTab *tab,
+    pid_t pgid,
+    pid_t *pids,
+    int count,
+    int fd,
+    const char *command,
+    JobState state)
+{
+    for (int i = 0; i < MAX_JOBS; i++)
+    {
+        if (!tab->jobs[i].used ||
+            tab->jobs[i].state == JOB_DONE)
+        {
+            ShellJob *job = &tab->jobs[i];
+
+            memset(job, 0, sizeof(*job));
+
+            job->used = 1;
+            job->id = ++tab->next_job_id;
+            job->pgid = pgid;
+            job->child_count = count;
+
+            for (int j = 0; j < count; j++)
+            {
+                job->child_pids[j] = pids[j];
+            }
+
+            job->output_fd = fd;
+            job->state = state;
+
+            snprintf(job->command, sizeof(job->command), "%s", command);
+
+            return job;
+        }
+    }
+
+    return NULL;
+}
+
+// void job_control_key(int suspend_job)
+// {
+//     TerminalTab *tab = &tabs[active_tab];
+
+//     if (!suspend_job)
+//         return;
+
+//     if (!tab->process_running ||
+//         tab->foreground_pgid <= 0)
+//     {
+//         append_output(
+//             "No foreground job to suspend.\n",
+//             32);
+//         gui_draw();
+//         return;
+//     }
+
+//     /* Request suspension of the foreground process group. */
+//     if (kill(-tab->foreground_pgid, SIGTSTP) == -1)
+//     {
+//         perror("kill(SIGTSTP)");
+//         return;
+//     }
+
+//     append_output(
+//         "\nSuspension requested for foreground job.\n",
+//         42);
+
+//     gui_draw();
+// }
+
+void job_control_key(int suspend_job)
+{
+    TerminalTab *tab = &tabs[active_tab];
+
+    if (!suspend_job)
+        return;
+
+    if (!tab->process_running ||
+        tab->foreground_pgid <= 0)
+    {
+        const char *msg = "No foreground job to suspend.\n";
+        append_output(msg, (int)strlen(msg));
+        gui_draw();
+        return;
+    }
+
+    int job_id = tab->foreground_job_id;
+    ShellJob *job = find_job(tab, job_id);
+
+    if (job == NULL)
+    {
+        const char *msg = "Error: foreground job not found.\n";
+        append_output(msg, (int)strlen(msg));
+        gui_draw();
+        return;
+    }
+
+    if (kill(-job->pgid, SIGTSTP) == -1)
+    {
+        perror("kill(SIGTSTP)");
+        return;
+    }
+
+    /*
+     * Wait for each pipeline child to stop or exit.
+     * WUNTRACED reports stopped children as well as exited ones.
+     */
+    int all_accounted_for = 1;
+
+    for (int i = 0; i < job->child_count; i++)
+    {
+        if (job->child_done[i] || job->child_stopped[i])
+            continue;
+
+        int status;
+        pid_t result;
+
+        do
+        {
+            result = waitpid(
+                job->child_pids[i],
+                &status,
+                WUNTRACED);
+        } while (result == -1 && errno == EINTR);
+
+        if (result == job->child_pids[i])
+        {
+            if (WIFSTOPPED(status))
+            {
+                job->child_stopped[i] = 1;
+            }
+            else if (WIFEXITED(status) || WIFSIGNALED(status))
+            {
+                job->child_done[i] = 1;
+                job->child_status[i] = status;
+            }
+            else
+            {
+                all_accounted_for = 0;
+            }
+        }
+        else
+        {
+            all_accounted_for = 0;
+        }
+    }
+
+    if (!all_accounted_for)
+    {
+        const char *msg = "Could not confirm that the job stopped.\n";
+        append_output(msg, (int)strlen(msg));
+        gui_draw();
+        return;
+    }
+
+    job->state = JOB_STOPPED;
+
+    /* Preserve the output pipe in the job entry. */
+    job->output_fd = tab->output_fd;
+    tab->output_fd = -1;
+
+    tab->process_running = 0;
+    tab->pid = 0;
+    tab->child_count = 0;
+    tab->foreground_pgid = 0;
+    tab->foreground_job_id = 0;
+
+    char msg[INPUT_SIZE + 64];
+    int n = snprintf(
+        msg,
+        sizeof(msg),
+        "\n[%d]+ Stopped %s\n",
+        job->id,
+        job->command);
+
+    if (n > 0)
+        append_output(msg, n < (int)sizeof(msg) ? n : (int)sizeof(msg) - 1);
+
+    gui_draw();
+}
+
+// void poll_job_statuses(void)
+// {
+//     for (int t = 0; t < tab_count; t++)
+//     {
+//         TerminalTab *tab = &tabs[t];
+
+//         for (int j = 0; j < MAX_JOBS; j++)
+//         {
+//             ShellJob *job = &tab->jobs[j];
+
+//             if (!job->used || job->state == JOB_DONE)
+//                 continue;
+
+//             int stopped_count = 0;
+//             int active_count = 0;
+
+//             for (int i = 0; i < job->child_count; i++)
+//             {
+//                 pid_t pid = job->child_pids[i];
+
+//                 if (job->child_done[i])
+//                     continue;
+
+//                 int status;
+//                 pid_t result = waitpid(
+//                     pid,
+//                     &status,
+//                     WNOHANG | WUNTRACED | WCONTINUED);
+
+//                 if (result == pid)
+//                 {
+//                     if (WIFEXITED(status) || WIFSIGNALED(status))
+//                     {
+//                         job->child_status[i] = status;
+//                         job->child_done[i] = 1;
+//                         job->child_stopped[i] = 0;
+//                     }
+//                     else if (WIFSTOPPED(status))
+//                     {
+//                         job->child_stopped[i] = 1;
+//                     }
+//                     else if (WIFCONTINUED(status))
+//                     {
+//                         job->child_stopped[i] = 0;
+//                     }
+//                 }
+
+//                 if (!job->child_done[i])
+//                 {
+//                     if (job->child_stopped[i])
+//                         stopped_count++;
+//                     else
+//                         active_count++;
+//                 }
+//             }
+
+//             if (stopped_count > 0 && active_count == 0)
+//                 job->state = JOB_STOPPED;
+//             else if (active_count > 0)
+//                 job->state = JOB_RUNNING;
+//             else
+//                 job->state = JOB_DONE;
+//         }
+//     }
+// }
+
+static int handle_job_builtin(TerminalTab *tab, int argc, char *argv[])
+{
+    if (argc == 0)
+        return 0;
+
+    if (strcmp(argv[0], "jobs") == 0)
+    {
+        int found = 0;
+
+        for (int i = 0; i < MAX_JOBS; i++)
+        {
+            ShellJob *job = &tab->jobs[i];
+
+            if (!job->used || job->state == JOB_DONE)
+                continue;
+
+            const char *state =
+                job->state == JOB_STOPPED ? "Stopped" : "Running";
+
+            char line[INPUT_SIZE + 64];
+
+            snprintf(
+                line,
+                sizeof(line),
+                "[%d] %-8s %s\n",
+                job->id,
+                state,
+                job->command);
+
+            append_output(line, (int)strlen(line));
+            found = 1;
+        }
+
+        if (!found)
+            append_output("No active jobs.\n", 16);
+
+        gui_draw();
+        return 1;
+    }
+
+    if (strcmp(argv[0], "bg") == 0)
+    {
+        if (argc < 2)
+        {
+            append_output("Usage: bg <job_id>\n", 19);
+            gui_draw();
+            return 1;
+        }
+
+        int job_id = atoi(argv[1]);
+
+        ShellJob *job = NULL;
+
+        for (int i = 0; i < MAX_JOBS; i++)
+        {
+            if (tab->jobs[i].used &&
+                tab->jobs[i].id == job_id &&
+                tab->jobs[i].state != JOB_DONE)
+            {
+                job = &tab->jobs[i];
+                break;
+            }
+        }
+
+        if (job == NULL)
+        {
+            append_output("bg: job not found\n", 18);
+            gui_draw();
+            return 1;
+        }
+
+        if (kill(-job->pgid, SIGCONT) == -1)
+        {
+            perror("bg: SIGCONT");
+            return 1;
+        }
+
+        job->state = JOB_RUNNING;
+
+        char line[INPUT_SIZE + 64];
+        int n = snprintf(
+            line,
+            sizeof(line),
+            "[%d]+ %s &\n",
+            job->id,
+            job->command);
+
+        if (n > 0)
+            append_output(line, n < (int)sizeof(line) ? n : (int)sizeof(line) - 1);
+
+        gui_draw();
+        return 1;
+    }
+
+    if (strcmp(argv[0], "fg") == 0)
+    {
+        if (argc < 2)
+        {
+            append_output("Usage: fg <job_id>\n", 19);
+            gui_draw();
+            return 1;
+        }
+
+        int job_id = atoi(argv[1]);
+        ShellJob *job = NULL;
+
+        for (int i = 0; i < MAX_JOBS; i++)
+        {
+            if (tab->jobs[i].used &&
+                tab->jobs[i].id == job_id &&
+                tab->jobs[i].state != JOB_DONE)
+            {
+                job = &tab->jobs[i];
+                break;
+            }
+        }
+
+        if (job == NULL)
+        {
+            append_output("fg: job not found\n", 18);
+            gui_draw();
+            return 1;
+        }
+
+        /* Resume the job if it is stopped. */
+        if (job->state == JOB_STOPPED)
+        {
+            if (kill(-job->pgid, SIGCONT) == -1)
+            {
+                perror("fg: SIGCONT");
+                return 1;
+            }
+        }
+
+        /* Restore the job's output pipe to the active terminal tab. */
+        /* Restore the job's output pipe to the active terminal tab. */
+        if (job->output_fd >= 0)
+        {
+            if (tab->output_fd >= 0)
+            {
+                close(tab->output_fd);
+            }
+
+            tab->output_fd = job->output_fd;
+            job->output_fd = -1;
+        }
+
+        /* Restore the process group and child process information. */
+
+        /* Restore the process group and child process information. */
+        tab->foreground_pgid = job->pgid;
+        tab->foreground_job_id = job->id;
+        tab->child_count = job->child_count;
+
+        for (int i = 0; i < job->child_count; i++)
+        {
+            tab->child_pids[i] = job->child_pids[i];
+
+            /*
+             * Preserve the job's existing status information.
+             * Do not clear child_done or child_status here:
+             * some pipeline children may already have exited.
+             */
+        }
+
+        tab->pid = job->child_count > 0
+                       ? job->child_pids[job->child_count - 1]
+                       : 0;
+
+        tab->process_running = 1;
+        job->state = JOB_RUNNING;
+
+        gui_draw();
+        return 1;
+    }
+
+    return 0;
+}
+
 int parse_arguments(char *command, char *argv[], int max_args)
 {
     static char storage[MAX_PIPE_COMMANDS][INPUT_SIZE];
@@ -484,6 +928,9 @@ static int expand_globs(char *argv[], char *expanded[],
 
 static void execute_pipeline(char *command, TerminalTab *tab)
 {
+    char original_command[INPUT_SIZE];
+    snprintf(original_command, sizeof(original_command), "%s", command);
+
     char *parts[MAX_PIPE_COMMANDS];
 
     int command_count =
@@ -718,6 +1165,27 @@ static void execute_pipeline(char *command, TerminalTab *tab)
     tab->process_running = 1;
     tab->last_status = 0;
 
+    /* Register the foreground process group in the job table. */
+    ShellJob *job = add_job(
+        tab,
+        pgid,
+        children,
+        started,
+        -1,
+        original_command,
+        JOB_RUNNING);
+
+    if (job == NULL)
+    {
+        append_output(
+            "Warning: job table is full.\n",
+            28);
+    }
+    else
+    {
+        tab->foreground_job_id = job->id;
+    }
+
     gui_draw();
 }
 
@@ -896,9 +1364,17 @@ void execute_command(void)
 
     if (tab->process_running)
     {
-        append_output("A command is already running in this tab.\n", 42);
-        gui_draw();
-        return;
+        char first_word[16] = {0};
+        sscanf(input, "%15s", first_word);
+
+        if (strcmp(first_word, "fg") != 0 &&
+            strcmp(first_word, "bg") != 0 &&
+            strcmp(first_word, "jobs") != 0)
+        {
+            append_output("A command is already running in this tab.\n", 42);
+            gui_draw();
+            return;
+        }
     }
 
     char command[INPUT_SIZE];
@@ -940,9 +1416,11 @@ void execute_command(void)
         return;
     }
 
+    char command_for_parsing[INPUT_SIZE];
+    strcpy(command_for_parsing, command);
+
     char *argv[64];
-    int argc = parse_arguments(command, argv, 64);
-    dprintf(STDERR_FILENO, "DEBUG argc=%d\n", argc);
+    int argc = parse_arguments(command_for_parsing, argv, 64);
 
     for (int i = 0; i < argc; i++)
     {
@@ -954,6 +1432,10 @@ void execute_command(void)
         gui_draw();
         return;
     }
+
+    /* Handle job-control built-ins before launching external commands. */
+    if (handle_job_builtin(tab, argc, argv))
+        return;
 
     if (strcmp(argv[0], "multiWatch") == 0)
     {
@@ -1147,6 +1629,7 @@ void execute_command(void)
     // tab->process_running = 1;
     // tab->last_status = 0;
 
+    fprintf(stderr, "DEBUG before execute_pipeline=[%s]\n", command);
     execute_pipeline(command, tab);
 
     // gui_draw();

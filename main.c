@@ -596,7 +596,7 @@ int main(void)
 #include "input.h"
 #include "scroll.h"
 
-#define MAX_POLL_FDS (1 + MAX_TABS + MAX_TABS * MAX_WATCH_COMMANDS)
+#define MAX_POLL_FDS (1 + MAX_TABS + MAX_TABS * MAX_WATCH_COMMANDS + MAX_TABS * MAX_JOBS)
 
 int running = 1;
 
@@ -631,6 +631,9 @@ static void read_tab_output(int index)
     TerminalTab *tab = &tabs[index];
     char buffer[1024];
 
+    if (tab->output_fd < 0)
+        return;
+
     ssize_t n = read(tab->output_fd, buffer, sizeof(buffer));
 
     if (n > 0)
@@ -664,32 +667,128 @@ static void read_tab_output(int index)
         close(tab->output_fd);
         tab->output_fd = -1;
 
+        int finished_job_id = tab->foreground_job_id;
+
         for (int i = 0; i < tab->child_count; i++)
         {
             int status;
             pid_t child = tab->child_pids[i];
-
             pid_t result;
+
             do
             {
-                result = waitpid(child, &status, 0);
+                result = waitpid(child, &status, WNOHANG);
             } while (result == -1 && errno == EINTR);
 
-            if (result == child && child == tab->pid)
+            if (result == child)
             {
-                if (WIFEXITED(status))
-                    tab->last_status = WEXITSTATUS(status);
-                else if (WIFSIGNALED(status))
-                    tab->last_status = 128 + WTERMSIG(status);
+                if (child == tab->pid)
+                {
+                    if (WIFEXITED(status))
+                        tab->last_status = WEXITSTATUS(status);
+                    else if (WIFSIGNALED(status))
+                        tab->last_status = 128 + WTERMSIG(status);
+                }
+            }
+        }
+
+        /* Mark the foreground job as completed. */
+        for (int i = 0; i < MAX_JOBS; i++)
+        {
+            ShellJob *job = &tab->jobs[i];
+
+            if (job->used && job->id == finished_job_id)
+            {
+                job->state = JOB_DONE;
+                break;
             }
         }
 
         tab->child_count = 0;
         tab->process_running = 0;
         tab->pid = 0;
+        tab->foreground_pgid = 0;
+        tab->foreground_job_id = 0;
 
         if (index == active_tab)
             gui_draw();
+    }
+}
+
+void read_job_output(int tab_index, int job_index)
+{
+    if (tab_index < 0 || tab_index >= tab_count ||
+        job_index < 0 || job_index >= MAX_JOBS)
+        return;
+
+    TerminalTab *tab = &tabs[tab_index];
+    ShellJob *job = &tab->jobs[job_index];
+
+    if (!job->used || job->output_fd < 0)
+        return;
+
+    char buffer[1024];
+    ssize_t n = read(job->output_fd, buffer, sizeof(buffer));
+
+    if (n > 0)
+    {
+        append_tab_output(tab_index, buffer, (int)n);
+        return;
+    }
+
+    if (n == 0 ||
+        (n < 0 && errno != EAGAIN && errno != EINTR))
+    {
+        close(job->output_fd);
+        job->output_fd = -1;
+
+        /* Check whether every child in this job has finished. */
+        int all_done = 1;
+
+        for (int i = 0; i < job->child_count; i++)
+        {
+            if (!job->child_done[i])
+            {
+                int status;
+                pid_t result;
+
+                do
+                {
+                    result = waitpid(
+                        job->child_pids[i],
+                        &status,
+                        WNOHANG);
+                } while (result == -1 && errno == EINTR);
+
+                if (result == job->child_pids[i])
+                {
+                    if (WIFEXITED(status) || WIFSIGNALED(status))
+                    {
+                        job->child_done[i] = 1;
+                        job->child_status[i] = status;
+                    }
+                    else
+                    {
+                        all_done = 0;
+                    }
+                }
+                else if (result == 0)
+                {
+                    all_done = 0;
+                }
+                else if (result == -1 && errno == ECHILD)
+                {
+                    job->child_done[i] = 1;
+                }
+                else
+                {
+                    all_done = 0;
+                }
+            }
+        }
+
+        if (all_done)
+            job->state = JOB_DONE;
     }
 }
 
@@ -787,6 +886,7 @@ int main(void)
         struct pollfd fds[MAX_POLL_FDS];
         int tab_indices[MAX_POLL_FDS];
         int watch_indices[MAX_POLL_FDS];
+        int job_indices[MAX_POLL_FDS];
 
         int count = 1;
 
@@ -796,6 +896,7 @@ int main(void)
 
         tab_indices[0] = -1;
         watch_indices[0] = -1;
+        job_indices[0] = -1;
 
         for (int i = 0; i < tab_count; i++)
         {
@@ -807,6 +908,7 @@ int main(void)
 
                 tab_indices[count] = i;
                 watch_indices[count] = -1;
+                job_indices[count] = -1;
 
                 count++;
             }
@@ -827,13 +929,35 @@ int main(void)
 
                     tab_indices[count] = i;
                     watch_indices[count] = j;
+                    job_indices[count] = -1;
 
                     count++;
                 }
             }
         }
 
-        int result = poll(fds, count, -1);
+        /* Add saved job output pipes to poll(). */
+        for (int i = 0; i < tab_count; i++)
+        {
+            for (int j = 0; j < MAX_JOBS; j++)
+            {
+                ShellJob *job = &tabs[i].jobs[j];
+
+                if (job->used && job->output_fd >= 0)
+                {
+                    fds[count].fd = job->output_fd;
+                    fds[count].events = POLLIN | POLLHUP | POLLERR;
+                    fds[count].revents = 0;
+
+                    tab_indices[count] = i;
+                    watch_indices[count] = -1;
+                    job_indices[count] = j;
+
+                    count++;
+                }
+            }
+        }
+        int result = poll(fds, count, 250);
 
         if (result < 0)
         {
@@ -879,10 +1003,18 @@ int main(void)
         {
             if (fds[i].revents & (POLLIN | POLLHUP | POLLERR))
             {
-                if (watch_indices[i] >= 0)
+                if (job_indices[i] >= 0)
+                {
+                    read_job_output(tab_indices[i], job_indices[i]);
+                }
+                else if (watch_indices[i] >= 0)
+                {
                     read_watch_output(tab_indices[i], watch_indices[i]);
+                }
                 else
+                {
                     read_tab_output(tab_indices[i]);
+                }
             }
         }
     }

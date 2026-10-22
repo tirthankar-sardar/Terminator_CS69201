@@ -446,11 +446,24 @@ void handle_keypress(XKeyEvent *event)
         {
             stop_multiwatch(tab);
         }
+        // else if (tab->process_running &&
+        //          tab->foreground_pgid > 0)
+        // {
+        //     if (kill(-tab->foreground_pgid, SIGINT) == -1)
+        //         perror("kill(SIGINT)");
+        // }
         else if (tab->process_running &&
                  tab->foreground_pgid > 0)
         {
             if (kill(-tab->foreground_pgid, SIGINT) == -1)
+            {
                 perror("kill(SIGINT)");
+            }
+            else
+            {
+                append_output("^C\n", 3);
+                gui_draw();
+            }
         }
         else
         {
@@ -464,6 +477,29 @@ void handle_keypress(XKeyEvent *event)
             gui_draw();
         }
 
+        return;
+    }
+
+    /* Ctrl+Z : Suspend the foreground process. */
+    // if ((event->state & ControlMask) &&
+    //     !(event->state & ShiftMask) &&
+    //     (raw_key == XK_z || raw_key == XK_Z))
+    // {
+    //     if (tab->process_running &&
+    //         tab->foreground_pgid > 0)
+    //     {
+    //         job_control_key(1);
+    //     }
+
+    //     return;
+    // }
+
+    /* Ctrl+Z: suspend the foreground job. */
+    if ((event->state & ControlMask) &&
+        !(event->state & ShiftMask) &&
+        (raw_key == XK_z || raw_key == XK_Z))
+    {
+        job_control_key(1);
         return;
     }
 
