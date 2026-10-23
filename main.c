@@ -595,6 +595,7 @@ int main(void)
 #include "gui.h"
 #include "input.h"
 #include "scroll.h"
+#include "history.h"
 
 #define MAX_POLL_FDS (1 + MAX_TABS + MAX_TABS * MAX_WATCH_COMMANDS + MAX_TABS * MAX_JOBS)
 
@@ -861,6 +862,8 @@ static void read_watch_output(int index, int watch_index)
 int main(void)
 {
 
+    history_init();
+    
     fprintf(stderr, "Starting Terminator...\n");
     fflush(stderr);
 

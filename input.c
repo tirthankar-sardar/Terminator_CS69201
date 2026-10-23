@@ -128,6 +128,7 @@
 #include <unistd.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
+#include <X11/Xlib.h>
 #include <X11/Xatom.h>
 
 #include "hotkeys.h"
@@ -135,6 +136,21 @@
 #include "input.h"
 #include "gui.h"
 #include "shell.h"
+#include "history.h"
+
+static int history_search_mode = 0;
+static char history_search_term[INPUT_SIZE];
+static int history_search_length = 0;
+
+int history_search_active(void)
+{
+    return history_search_mode;
+}
+
+const char *history_search_text(void)
+{
+    return history_search_term;
+}
 
 extern int running;
 
@@ -401,6 +417,21 @@ void handle_selection_notify(XSelectionEvent *event)
     XFree(data);
 }
 
+static void start_history_search(void)
+{
+    history_search_mode = 1;
+    history_search_length = 0;
+    history_search_term[0] = '\0';
+
+    append_output("\nReverse history search (Ctrl+R)\n",
+                  (int)strlen("\nReverse history search (Ctrl+R)\n"));
+
+    append_output("Enter search term: ",
+                  (int)strlen("Enter search term: "));
+
+    gui_draw();
+}
+
 /* Process keyboard input and hotkeys. */
 void handle_keypress(XKeyEvent *event)
 {
@@ -413,6 +444,69 @@ void handle_keypress(XKeyEvent *event)
     KeySym raw_key = XLookupKeysym(event, 0);
 
     TerminalTab *tab = &tabs[active_tab];
+
+    /* Handle keyboard input while Ctrl+R search is active. */
+    if (history_search_mode)
+    {
+        /* Escape cancels the search. */
+        if (key == XK_BackSpace || raw_key == XK_BackSpace)
+        {
+            if (history_search_length > 0)
+            {
+                history_search_length--;
+                history_search_term[history_search_length] = '\0';
+            }
+
+            gui_draw();
+            return;
+        }
+
+        /* Backspace removes one search character. */
+        if (key == XK_BackSpace)
+        {
+            if (history_search_length > 0)
+            {
+                history_search_length--;
+                history_search_term[history_search_length] = '\0';
+            }
+
+            gui_draw();
+            return;
+        }
+
+        /* Enter completes the search. */
+        if (key == XK_Return || key == XK_KP_Enter)
+        {
+            history_search_mode = 0;
+
+            append_output("\n", 1);
+            history_search(history_search_term);
+
+            history_search_term[0] = '\0';
+            history_search_length = 0;
+
+            gui_draw();
+            return;
+        }
+
+        /* Insert printable characters into the search term. */
+        if (length > 0 &&
+            !(event->state & (ControlMask | Mod1Mask)))
+        {
+            if (history_search_length + length < INPUT_SIZE)
+            {
+                memcpy(history_search_term + history_search_length,
+                       text, (size_t)length);
+
+                history_search_length += length;
+                history_search_term[history_search_length] = '\0';
+            }
+
+            gui_draw();
+        }
+
+        return;
+    }
 
     /* Ctrl+Shift+C: copy before checking Ctrl+C. */
     if ((event->state & ControlMask) &&
@@ -429,6 +523,15 @@ void handle_keypress(XKeyEvent *event)
         (raw_key == XK_v || raw_key == XK_V))
     {
         request_paste();
+        return;
+    }
+
+    /* Ctrl+R: start searchable history. */
+    if ((event->state & ControlMask) &&
+        !(event->state & ShiftMask) &&
+        (raw_key == XK_r || raw_key == XK_R))
+    {
+        start_history_search();
         return;
     }
 
@@ -521,9 +624,15 @@ void handle_keypress(XKeyEvent *event)
     }
 
     /* Escape: close the application. */
+    // if (raw_key == XK_Escape)
+    // {
+    //     running = 0;
+    //     return;
+    // }
+
+    /* Escape: cancel the current operation without closing Terminator. */
     if (raw_key == XK_Escape)
     {
-        running = 0;
         return;
     }
 
@@ -630,6 +739,8 @@ void handle_keypress(XKeyEvent *event)
             remember_command(active_tab, input);
 
             tab->continuation_mode = 0;
+
+            history_add(input);
 
             execute_command();
 

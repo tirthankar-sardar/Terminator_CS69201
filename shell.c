@@ -20,6 +20,7 @@
 #include "shell.h"
 #include "gui.h"
 #include "variables.h"
+#include "history.h"
 
 /* Find an existing job using its job ID. */
 static ShellJob *find_job(TerminalTab *tab, int id)
@@ -459,6 +460,12 @@ static int handle_job_builtin(TerminalTab *tab, int argc, char *argv[])
         job->state = JOB_RUNNING;
 
         gui_draw();
+        return 1;
+    }
+
+    if (strcmp(argv[0], "history") == 0)
+    {
+        history_print();
         return 1;
     }
 

@@ -162,6 +162,10 @@ void gui_cleanup(void)
 #include "hotkeys.h"
 #include "terminal.h"
 #include "gui.h"
+#include "history.h"
+
+int history_search_active(void);
+const char *history_search_text(void);
 
 XFontStruct *font_info;
 
@@ -459,69 +463,154 @@ void gui_draw(void)
     //     }
     // }
 
-    /* Draw prompt and multiline input with cursor */
-    int input_x = x;
-    int input_y = prompt_y;
-    int start = 0;
+    // /* Draw prompt and multiline input with cursor */
+    // int input_x = x;
+    // int input_y = prompt_y;
+    // int start = 0;
 
-    int input_line_height = line_height;
-    int prompt_width = 20;
-    int cursor_x = input_x + prompt_width;
-    int cursor_y = input_y;
+    // int input_line_height = line_height;
+    // int prompt_width = 20;
+    // int cursor_x = input_x + prompt_width;
+    // int cursor_y = input_y;
 
-    const char *prompt =
-        tabs[active_tab].continuation_mode ? "> " : "$ ";
+    // const char *prompt =
+    //     tabs[active_tab].continuation_mode ? "> " : "$ ";
 
-    XDrawString(display, window, gc, input_x, input_y, prompt, 2);
-    input_x += prompt_width;
+    // XDrawString(display, window, gc, input_x, input_y, prompt, 2);
+    // input_x += prompt_width;
 
-    for (int i = 0; i <= input_length; i++)
+    // for (int i = 0; i <= input_length; i++)
+    // {
+    //     if (i == input_cursor)
+    //     {
+    //         cursor_y = input_y;
+    //         cursor_x = input_x;
+
+    //         if (i > start)
+    //         {
+    //             cursor_x += XTextWidth(font_info, input + start, i - start);
+    //         }
+    //     }
+
+    //     if (input[i] == '\n' || input[i] == '\0')
+    //     {
+    //         if (i > start)
+    //         {
+    //             XDrawString(
+    //                 display, window, gc,
+    //                 input_x, input_y,
+    //                 input + start, i - start);
+    //         }
+
+    //         if (input[i] == '\n')
+    //         {
+    //             input_y += input_line_height;
+    //             start = i + 1;
+    //             input_x = x;
+
+    //             XDrawString(
+    //                 display, window, gc,
+    //                 input_x, input_y, "> ", 2);
+
+    //             input_x += prompt_width;
+    //         }
+    //         else
+    //         {
+    //             break;
+    //         }
+    //     }
+    // }
+
+    // /* Draw the visible insertion cursor. */
+    // XDrawLine(
+    //     display, window, gc,
+    //     cursor_x, cursor_y - 13,
+    //     cursor_x, cursor_y + 3);
+
+    /* Draw the active search prompt or normal command input. */
+    if (history_search_active())
     {
-        if (i == input_cursor)
-        {
-            cursor_y = input_y;
-            cursor_x = input_x;
+        const char *label = "Enter search term: ";
+        const char *term = history_search_text();
 
-            if (i > start)
-            {
-                cursor_x += XTextWidth(font_info, input + start, i - start);
-            }
-        }
+        XDrawString(
+            display, window, gc,
+            x, prompt_y,
+            label, (int)strlen(label));
 
-        if (input[i] == '\n' || input[i] == '\0')
-        {
-            if (i > start)
-            {
-                XDrawString(
-                    display, window, gc,
-                    input_x, input_y,
-                    input + start, i - start);
-            }
-
-            if (input[i] == '\n')
-            {
-                input_y += input_line_height;
-                start = i + 1;
-                input_x = x;
-
-                XDrawString(
-                    display, window, gc,
-                    input_x, input_y, "> ", 2);
-
-                input_x += prompt_width;
-            }
-            else
-            {
-                break;
-            }
-        }
+        XDrawString(
+            display, window, gc,
+            x + XTextWidth(font_info, label, (int)strlen(label)),
+            prompt_y,
+            term, (int)strlen(term));
     }
+    else
+    {
+        /* Draw the normal prompt and multiline input with cursor. */
+        int input_x = x;
+        int input_y = prompt_y;
+        int start = 0;
 
-    /* Draw the visible insertion cursor. */
-    XDrawLine(
-        display, window, gc,
-        cursor_x, cursor_y - 13,
-        cursor_x, cursor_y + 3);
+        int input_line_height = line_height;
+        int prompt_width = 20;
+        int cursor_x = input_x + prompt_width;
+        int cursor_y = input_y;
+
+        const char *prompt =
+            tabs[active_tab].continuation_mode ? "> " : "$ ";
+
+        XDrawString(display, window, gc, input_x, input_y, prompt, 2);
+        input_x += prompt_width;
+
+        for (int i = 0; i <= input_length; i++)
+        {
+            if (i == input_cursor)
+            {
+                cursor_y = input_y;
+                cursor_x = input_x;
+
+                if (i > start)
+                {
+                    cursor_x += XTextWidth(
+                        font_info, input + start, i - start);
+                }
+            }
+
+            if (input[i] == '\n' || input[i] == '\0')
+            {
+                if (i > start)
+                {
+                    XDrawString(
+                        display, window, gc,
+                        input_x, input_y,
+                        input + start, i - start);
+                }
+
+                if (input[i] == '\n')
+                {
+                    input_y += input_line_height;
+                    start = i + 1;
+                    input_x = x;
+
+                    XDrawString(
+                        display, window, gc,
+                        input_x, input_y, "> ", 2);
+
+                    input_x += prompt_width;
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+
+        /* Draw the visible insertion cursor. */
+        XDrawLine(
+            display, window, gc,
+            cursor_x, cursor_y - 13,
+            cursor_x, cursor_y + 3);
+    }
 
     XFlush(display);
 }
