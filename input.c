@@ -137,6 +137,7 @@
 #include "gui.h"
 #include "shell.h"
 #include "history.h"
+#include "completion.h"
 
 static int history_search_mode = 0;
 static char history_search_term[INPUT_SIZE];
@@ -526,6 +527,13 @@ void handle_keypress(XKeyEvent *event)
         return;
     }
 
+    /* Handle numbered file-completion choices. */
+    if (completion_handle_key(key, input, &input_cursor, &input_length))
+    {
+        gui_draw();
+        return;
+    }
+
     /* Ctrl+R: start searchable history. */
     if ((event->state & ControlMask) &&
         !(event->state & ShiftMask) &&
@@ -603,6 +611,19 @@ void handle_keypress(XKeyEvent *event)
         (raw_key == XK_z || raw_key == XK_Z))
     {
         job_control_key(1);
+        return;
+    }
+
+    /* Tab: complete a filename in the active tab's directory. */
+    if (key == XK_Tab || raw_key == XK_Tab)
+    {
+        completion_handle_tab(
+            input,
+            &input_cursor,
+            &input_length,
+            tabs[active_tab].cwd);
+
+        gui_draw();
         return;
     }
 

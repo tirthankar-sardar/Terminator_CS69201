@@ -11,12 +11,12 @@ int handle_scroll_event(XEvent *event)
 
     KeySym key = XLookupKeysym(&event->xkey, 0);
 
-    if (key == XK_6)
+    if (key == XK_Up)
     {
         gui_scroll(3);
         return 1;
     }
-    else if (key == XK_9)
+    else if (key == XK_Down)
     {
         gui_scroll(-3);
         return 1;

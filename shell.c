@@ -21,6 +21,7 @@
 #include "gui.h"
 #include "variables.h"
 #include "history.h"
+#include "script.h"
 
 /* Find an existing job using its job ID. */
 static ShellJob *find_job(TerminalTab *tab, int id)
@@ -1196,6 +1197,17 @@ static void execute_pipeline(char *command, TerminalTab *tab)
     gui_draw();
 }
 
+void execute_script_line(const char *command, TerminalTab *tab)
+{
+    if (command == NULL || tab == NULL || command[0] == '\0')
+        return;
+
+    char buffer[INPUT_SIZE];
+    snprintf(buffer, sizeof(buffer), "%s", command);
+
+    execute_pipeline(buffer, tab);
+}
+
 /*void execute_command(void)
 {
     input[input_length] = '\0';
@@ -1636,7 +1648,12 @@ void execute_command(void)
     // tab->process_running = 1;
     // tab->last_status = 0;
 
-    fprintf(stderr, "DEBUG before execute_pipeline=[%s]\n", command);
+    if (script_handle_command(argc, argv, tab))
+    {
+        gui_draw();
+        return;
+    }
+
     execute_pipeline(command, tab);
 
     // gui_draw();
