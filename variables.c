@@ -139,10 +139,10 @@ void expand_variables(const char *src, char *dest, size_t size)
     dest[j] = '\0';
 }*/
 
-
 #include "variables.h"
 #include "terminal.h"
 
+#include <stdio.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -299,6 +299,28 @@ void expand_variables(const char *src, char *dest, size_t size,
             continue;
         }
 
+        /* Expand $? to the previous command's exit status. */
+        if (src[i] == '$' && src[i + 1] == '?')
+        {
+            char status_text[16];
+            int status = 0;
+
+            if (tab_index >= 0 && tab_index < MAX_TABS)
+                status = tabs[tab_index].last_status;
+
+            snprintf(status_text, sizeof(status_text), "%d", status);
+
+            for (size_t k = 0;
+                 status_text[k] != '\0' && j + 1 < size;
+                 k++)
+            {
+                dest[j++] = status_text[k];
+            }
+
+            i += 2;
+            continue;
+        }
+
         size_t dollar = i;
         size_t start = i + 1;
         size_t end = start;
@@ -371,4 +393,3 @@ void clear_tab_variables(int tab_index)
 
     memset(variables[tab_index], 0, sizeof(variables[tab_index]));
 }
-

@@ -7,6 +7,7 @@
 void execute_command(void);
 
 void execute_script_line(const char *command, TerminalTab *tab);
+int execute_script_line_sync(const char *command, TerminalTab *tab);
 
 void execute_command_string(
     const char *command,

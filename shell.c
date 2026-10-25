@@ -13,7 +13,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include <errno.h>
 #include <glob.h>
 #include "io_redirect.h"
 #include "terminal.h"
@@ -499,7 +498,16 @@ int parse_arguments(char *command, char *argv[], int max_args)
         if (command[i] == '<' || command[i] == '>')
         {
             argv[argc++] = &token_storage[j];
-            token_storage[j++] = command[i++];
+
+            char redirection = command[i++];
+            token_storage[j++] = redirection;
+
+            /* Recognize >> as one token. */
+            if (redirection == '>' && command[i] == '>')
+            {
+                token_storage[j++] = command[i++];
+            }
+
             token_storage[j++] = '\0';
             continue;
         }
@@ -934,7 +942,7 @@ static int expand_globs(char *argv[], char *expanded[],
     return count;
 }
 
-static void execute_pipeline(char *command, TerminalTab *tab)
+static int execute_pipeline(char *command, TerminalTab *tab)
 {
     char original_command[INPUT_SIZE];
     snprintf(original_command, sizeof(original_command), "%s", command);
@@ -949,7 +957,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
         append_output("terminator: invalid pipeline\n", 29);
         tab->last_status = 2;
         gui_draw();
-        return;
+        return 1;
     }
 
     char *stage_argv[MAX_PIPE_COMMANDS][64];
@@ -970,7 +978,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
                 54);
             tab->last_status = 2;
             gui_draw();
-            return;
+            return 1;
         }
 
         if (expand_globs(stage_argv[i], expanded_argv[i],
@@ -979,7 +987,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
             append_output("terminator: too many arguments\n", 31);
             tab->last_status = 2;
             gui_draw();
-            return;
+            return 1;
         }
     }
 
@@ -1001,7 +1009,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
             append_output("terminator: pipe failed\n", 23);
             tab->last_status = 1;
             gui_draw();
-            return;
+            return 1;
         }
 
         made_pipes++;
@@ -1019,7 +1027,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
         append_output("terminator: output pipe failed\n", 30);
         tab->last_status = 1;
         gui_draw();
-        return;
+        return 1;
     }
 
     pid_t children[MAX_PIPE_COMMANDS];
@@ -1104,9 +1112,16 @@ static void execute_pipeline(char *command, TerminalTab *tab)
             /* Apply explicit output redirection. */
             if (redirects[i].output_file != NULL)
             {
+                int flags = O_WRONLY | O_CREAT;
+
+                if (redirects[i].append_output)
+                    flags |= O_APPEND;
+                else
+                    flags |= O_TRUNC;
+
                 int out_fd = open(
                     redirects[i].output_file,
-                    O_WRONLY | O_CREAT | O_TRUNC,
+                    flags,
                     0644);
 
                 if (out_fd == -1)
@@ -1158,7 +1173,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
         close(capture[0]);
         tab->last_status = 1;
         gui_draw();
-        return;
+        return 1;
     }
 
     /* Save every child PID for the event loop to reap. */
@@ -1195,6 +1210,7 @@ static void execute_pipeline(char *command, TerminalTab *tab)
     }
 
     gui_draw();
+    return 0;
 }
 
 void execute_script_line(const char *command, TerminalTab *tab)
@@ -1654,7 +1670,434 @@ void execute_command(void)
         return;
     }
 
-    execute_pipeline(command, tab);
+    tab->last_status = execute_pipeline(command, tab);
 
-    // gui_draw();
+    gui_draw();
+}
+
+static int execute_script_pipeline_sync(const char *command,
+                                        TerminalTab *tab)
+{
+    char buffer[INPUT_SIZE];
+    snprintf(buffer, sizeof(buffer), "%s", command);
+
+    char *parts[MAX_PIPE_COMMANDS];
+    int count = split_pipeline(buffer, parts, MAX_PIPE_COMMANDS);
+
+    if (count <= 0)
+    {
+        append_output("terminator: invalid pipeline\n", 29);
+        return 2;
+    }
+
+    char *args[MAX_PIPE_COMMANDS][64];
+    char *expanded[MAX_PIPE_COMMANDS][64];
+    IORedirection redirects[MAX_PIPE_COMMANDS];
+
+    for (int i = 0; i < count; i++)
+    {
+        int argc = parse_arguments(parts[i], args[i], 64);
+
+        if (argc <= 0 ||
+            parse_redirections(args[i], &redirects[i]) != 0 ||
+            args[i][0] == NULL)
+        {
+            append_output("terminator: invalid pipeline command\n", 37);
+            return 2;
+        }
+
+        if (expand_globs(args[i], expanded[i], 64, tab->cwd) < 0)
+        {
+            append_output("terminator: too many arguments\n", 31);
+            return 2;
+        }
+    }
+
+    int pipes[MAX_PIPE_COMMANDS - 1][2];
+    int capture[2];
+    int made = 0;
+
+    for (int i = 0; i < count - 1; i++)
+    {
+        if (pipe(pipes[i]) == -1)
+        {
+            for (int j = 0; j < made; j++)
+            {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            append_output("terminator: pipe failed\n", 23);
+            return 1;
+        }
+        made++;
+    }
+
+    if (pipe(capture) == -1)
+    {
+        for (int i = 0; i < made; i++)
+        {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
+        append_output("terminator: output pipe failed\n", 30);
+        return 1;
+    }
+
+    pid_t children[MAX_PIPE_COMMANDS];
+    int started = 0;
+
+    for (int i = 0; i < count; i++)
+    {
+        pid_t pid = fork();
+
+        if (pid == -1)
+        {
+            append_output("terminator: fork failed\n", 23);
+            break;
+        }
+
+        if (pid == 0)
+        {
+            if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) == -1)
+                _exit(126);
+
+            if (i < count - 1)
+            {
+                if (dup2(pipes[i][1], STDOUT_FILENO) == -1)
+                    _exit(126);
+            }
+            else if (dup2(capture[1], STDOUT_FILENO) == -1)
+                _exit(126);
+
+            if (dup2(capture[1], STDERR_FILENO) == -1)
+                _exit(126);
+
+            for (int j = 0; j < count - 1; j++)
+            {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            close(capture[0]);
+            close(capture[1]);
+
+            if (chdir(tab->cwd) != 0)
+                _exit(126);
+
+            if (redirects[i].input_file != NULL)
+            {
+                int fd = open(redirects[i].input_file, O_RDONLY);
+                if (fd == -1)
+                {
+                    dprintf(STDERR_FILENO,
+                            "terminator: cannot open input file: %s\n",
+                            redirects[i].input_file);
+                    _exit(1);
+                }
+                if (dup2(fd, STDIN_FILENO) == -1)
+                    _exit(126);
+                close(fd);
+            }
+
+            if (redirects[i].output_file != NULL)
+            {
+                int flags = O_WRONLY | O_CREAT |
+                            (redirects[i].append_output ? O_APPEND : O_TRUNC);
+                int fd = open(redirects[i].output_file, flags, 0644);
+
+                if (fd == -1)
+                {
+                    dprintf(STDERR_FILENO,
+                            "terminator: cannot open output file: %s\n",
+                            redirects[i].output_file);
+                    _exit(1);
+                }
+                if (dup2(fd, STDOUT_FILENO) == -1)
+                    _exit(126);
+                close(fd);
+            }
+
+            execvp(expanded[i][0], expanded[i]);
+            int saved_errno = errno;
+            dprintf(STDERR_FILENO, "terminator: %s: %s\n",
+                    expanded[i][0], strerror(saved_errno));
+            _exit(saved_errno == ENOENT ? 127 : 126);
+        }
+
+        children[started++] = pid;
+    }
+
+    for (int i = 0; i < count - 1; i++)
+    {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+    close(capture[1]);
+
+    char output[1024];
+    ssize_t n;
+    while ((n = read(capture[0], output, sizeof(output))) > 0)
+    {
+        append_output(output, (int)n);
+        gui_draw();
+    }
+    close(capture[0]);
+
+    int last_status = 1;
+
+    for (int i = 0; i < started; i++)
+    {
+        int status;
+        pid_t result;
+
+        do
+        {
+            result = waitpid(children[i], &status, 0);
+        } while (result == -1 && errno == EINTR);
+
+        if (result == children[i] && i == started - 1)
+        {
+            if (WIFEXITED(status))
+                last_status = WEXITSTATUS(status);
+            else if (WIFSIGNALED(status))
+                last_status = 128 + WTERMSIG(status);
+        }
+    }
+
+    return last_status;
+}
+
+int capture_script_command(const char *command, TerminalTab *tab,
+                           char *result, size_t result_size)
+{
+    if (command == NULL || tab == NULL ||
+        result == NULL || result_size == 0)
+        return 1;
+
+    result[0] = '\0';
+
+    int output_pipe[2];
+
+    if (pipe(output_pipe) == -1)
+        return 1;
+
+    pid_t pid = fork();
+
+    if (pid == -1)
+    {
+        close(output_pipe[0]);
+        close(output_pipe[1]);
+        return 1;
+    }
+
+    if (pid == 0)
+    {
+        close(output_pipe[0]);
+
+        if (dup2(output_pipe[1], STDOUT_FILENO) == -1)
+            _exit(126);
+
+        close(output_pipe[1]);
+
+        if (chdir(tab->cwd) != 0)
+            _exit(126);
+
+        execl("/bin/sh", "sh", "-c", command, (char *)NULL);
+        _exit(127);
+    }
+
+    close(output_pipe[1]);
+
+    size_t used = 0;
+    char buffer[512];
+    ssize_t bytes_read;
+
+    while ((bytes_read = read(output_pipe[0],
+                              buffer, sizeof(buffer))) > 0)
+    {
+        size_t available = result_size - 1 - used;
+        size_t copy_size = (size_t)bytes_read;
+
+        if (copy_size > available)
+            copy_size = available;
+
+        if (copy_size > 0)
+        {
+            memcpy(result + used, buffer, copy_size);
+            used += copy_size;
+        }
+    }
+
+    close(output_pipe[0]);
+    result[used] = '\0';
+
+    int status;
+    while (waitpid(pid, &status, 0) == -1)
+    {
+        if (errno != EINTR)
+            return 1;
+    }
+
+    /* Remove trailing newlines, as shell substitution normally does. */
+    while (used > 0 &&
+           (result[used - 1] == '\n' || result[used - 1] == '\r'))
+    {
+        result[--used] = '\0';
+    }
+
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+
+    return 1;
+}
+
+int execute_script_line_sync(const char *command, TerminalTab *tab)
+{
+    if (command == NULL || tab == NULL || command[0] == '\0')
+        return 0;
+
+    if (strchr(command, '|') != NULL)
+        return execute_script_pipeline_sync(command, tab);
+
+    char buffer[INPUT_SIZE];
+    snprintf(buffer, sizeof(buffer), "%s", command);
+
+    char *argv[64];
+    int argc = parse_arguments(buffer, argv, 64);
+
+    if (argc <= 0)
+        return 0;
+
+    IORedirection redirect;
+
+    if (parse_redirections(argv, &redirect) != 0 || argv[0] == NULL)
+    {
+        append_output("terminator: invalid redirection\n", 31);
+        return 2;
+    }
+
+    int output_pipe[2];
+
+    if (pipe(output_pipe) == -1)
+    {
+        append_output("terminator: pipe failed\n", 23);
+        return 1;
+    }
+
+    pid_t pid = fork();
+
+    if (pid < 0)
+    {
+        close(output_pipe[0]);
+        close(output_pipe[1]);
+        append_output("terminator: fork failed\n", 23);
+        return 1;
+    }
+
+    if (pid == 0)
+    {
+        close(output_pipe[0]);
+
+        if (dup2(output_pipe[1], STDOUT_FILENO) == -1 ||
+            dup2(output_pipe[1], STDERR_FILENO) == -1)
+            _exit(126);
+
+        close(output_pipe[1]);
+
+        if (chdir(tab->cwd) != 0)
+        {
+            dprintf(STDERR_FILENO,
+                    "terminator: cannot change directory\n");
+            _exit(126);
+        }
+
+        /* Redirect input from a file when requested. */
+        if (redirect.input_file != NULL)
+        {
+            int in_fd = open(redirect.input_file, O_RDONLY);
+
+            if (in_fd == -1)
+            {
+                dprintf(STDERR_FILENO,
+                        "terminator: cannot open input file: %s\n",
+                        redirect.input_file);
+                _exit(1);
+            }
+
+            if (dup2(in_fd, STDIN_FILENO) == -1)
+                _exit(126);
+
+            close(in_fd);
+        }
+
+        /* Redirect or append output to a file when requested. */
+        if (redirect.output_file != NULL)
+        {
+            int flags = O_WRONLY | O_CREAT;
+
+            if (redirect.append_output)
+                flags |= O_APPEND;
+            else
+                flags |= O_TRUNC;
+
+            int out_fd = open(redirect.output_file, flags, 0644);
+
+            if (out_fd == -1)
+            {
+                dprintf(STDERR_FILENO,
+                        "terminator: cannot open output file: %s\n",
+                        redirect.output_file);
+                _exit(1);
+            }
+
+            if (dup2(out_fd, STDOUT_FILENO) == -1)
+                _exit(126);
+
+            close(out_fd);
+        }
+
+        execvp(argv[0], argv);
+
+        int saved_errno = errno;
+
+        dprintf(STDERR_FILENO, "terminator: %s: %s\n",
+                argv[0], strerror(saved_errno));
+
+        _exit(saved_errno == ENOENT ? 127 : 126);
+    }
+
+    close(output_pipe[1]);
+
+    char output[1024];
+    ssize_t bytes_read;
+
+    while ((bytes_read = read(output_pipe[0],
+                              output, sizeof(output))) > 0)
+    {
+        append_output(output, (int)bytes_read);
+        gui_draw();
+    }
+
+    close(output_pipe[0]);
+
+    int status;
+    pid_t result;
+
+    do
+    {
+        result = waitpid(pid, &status, 0);
+    } while (result == -1 && errno == EINTR);
+
+    if (result == -1)
+        return 1;
+
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+
+    return 1;
 }
