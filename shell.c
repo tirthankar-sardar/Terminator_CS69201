@@ -1457,11 +1457,6 @@ void execute_command(void)
     char *argv[64];
     int argc = parse_arguments(command_for_parsing, argv, 64);
 
-    for (int i = 0; i < argc; i++)
-    {
-        dprintf(STDERR_FILENO, "DEBUG argv[%d]=[%s]\n", i, argv[i]);
-    }
-
     if (argc == 0)
     {
         gui_draw();
@@ -1499,24 +1494,6 @@ void execute_command(void)
         gui_close_tab();
         return;
     }
-
-    /*if (strcmp(argv[0], "cd") == 0)
-    {
-        const char *path = argc == 1 ? getenv("HOME") : argv[1];
-
-        if (path == NULL || chdir(path) != 0)
-        {
-            append_output("cd: unable to change directory\n", 31);
-            tab->last_status = 1;
-        }
-        else
-        {
-            tab->last_status = 0;
-        }
-
-        gui_draw();
-        return;
-    }*/
     if (strcmp(argv[0], "cd") == 0)
     {
         const char *path = argc == 1 ? getenv("HOME") : argv[1];
@@ -1670,9 +1647,10 @@ void execute_command(void)
         return;
     }
 
-    tab->last_status = execute_pipeline(command, tab);
+    execute_pipeline(command, tab);
 
     gui_draw();
+    return;
 }
 
 static int execute_script_pipeline_sync(const char *command,

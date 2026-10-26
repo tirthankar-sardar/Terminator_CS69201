@@ -1,0 +1,3 @@
+echo "BEFORE_EXIT"
+exit 7
+echo "SHOULD_NOT_PRINT"

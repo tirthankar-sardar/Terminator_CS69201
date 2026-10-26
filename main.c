@@ -670,6 +670,9 @@ static void read_tab_output(int index)
 
         int finished_job_id = tab->foreground_job_id;
 
+        int final_status = tab->last_status;
+        pid_t final_pid = tab->pid;
+
         for (int i = 0; i < tab->child_count; i++)
         {
             int status;
@@ -678,20 +681,19 @@ static void read_tab_output(int index)
 
             do
             {
-                result = waitpid(child, &status, WNOHANG);
+                result = waitpid(child, &status, 0);
             } while (result == -1 && errno == EINTR);
 
-            if (result == child)
+            if (child == final_pid && result == child)
             {
-                if (child == tab->pid)
-                {
-                    if (WIFEXITED(status))
-                        tab->last_status = WEXITSTATUS(status);
-                    else if (WIFSIGNALED(status))
-                        tab->last_status = 128 + WTERMSIG(status);
-                }
+                if (WIFEXITED(status))
+                    final_status = WEXITSTATUS(status);
+                else if (WIFSIGNALED(status))
+                    final_status = 128 + WTERMSIG(status);
             }
         }
+
+        tab->last_status = final_status;
 
         /* Mark the foreground job as completed. */
         for (int i = 0; i < MAX_JOBS; i++)
@@ -751,27 +753,18 @@ void read_job_output(int tab_index, int job_index)
             if (!job->child_done[i])
             {
                 int status;
+                pid_t child = job->child_pids[i];
                 pid_t result;
 
                 do
                 {
-                    result = waitpid(
-                        job->child_pids[i],
-                        &status,
-                        WNOHANG);
+                    result = waitpid(child, &status, WNOHANG);
                 } while (result == -1 && errno == EINTR);
 
-                if (result == job->child_pids[i])
+                if (result == child)
                 {
-                    if (WIFEXITED(status) || WIFSIGNALED(status))
-                    {
-                        job->child_done[i] = 1;
-                        job->child_status[i] = status;
-                    }
-                    else
-                    {
-                        all_done = 0;
-                    }
+                    job->child_done[i] = 1;
+                    job->child_status[i] = status;
                 }
                 else if (result == 0)
                 {
@@ -779,6 +772,7 @@ void read_job_output(int tab_index, int job_index)
                 }
                 else if (result == -1 && errno == ECHILD)
                 {
+                    /* Another handler may already have reaped it. */
                     job->child_done[i] = 1;
                 }
                 else
@@ -786,6 +780,9 @@ void read_job_output(int tab_index, int job_index)
                     all_done = 0;
                 }
             }
+
+            if (!job->child_done[i])
+                all_done = 0;
         }
 
         if (all_done)
@@ -863,7 +860,7 @@ int main(void)
 {
 
     history_init();
-    
+
     fprintf(stderr, "Starting Terminator...\n");
     fflush(stderr);
 
