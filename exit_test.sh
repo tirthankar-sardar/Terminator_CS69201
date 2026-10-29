@@ -1,3 +1,0 @@
-echo BEFORE_EXIT
-exit 7
-echo AFTER_EXIT

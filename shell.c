@@ -1388,6 +1388,74 @@ static void start_multiwatch(char commands[][INPUT_SIZE],
                              int count,
                              TerminalTab *tab);
 
+int capture_script_command(const char *command, TerminalTab *tab,
+                           char *result, size_t result_size);
+
+static int expand_command_substitutions(
+    const char *src,
+    char *dest,
+    size_t dest_size,
+    TerminalTab *tab)
+{
+    size_t i = 0;
+    size_t j = 0;
+
+    while (src[i] != '\0' && j + 1 < dest_size)
+    {
+        if (src[i] == '$' && src[i + 1] == '(')
+        {
+            size_t start = i + 2;
+            size_t end = start;
+            int depth = 1;
+
+            while (src[end] != '\0' && depth > 0)
+            {
+                if (src[end] == '(')
+                    depth++;
+                else if (src[end] == ')')
+                    depth--;
+                end++;
+            }
+
+            if (depth != 0)
+                return -1; /* Unclosed $(...) */
+
+            char subcommand[INPUT_SIZE];
+            size_t command_len = end - start - 1;
+
+            if (command_len >= sizeof(subcommand))
+                return -1;
+
+            memcpy(subcommand, src + start, command_len);
+            subcommand[command_len] = '\0';
+
+            char output[INPUT_SIZE];
+            if (capture_script_command(subcommand, tab,
+                                       output, sizeof(output)) != 0)
+                return -1;
+
+            /* Shell command substitution removes trailing newlines. */
+            size_t output_len = strlen(output);
+            while (output_len > 0 && output[output_len - 1] == '\n')
+                output[--output_len] = '\0';
+
+            if (output_len >= dest_size - j)
+                return -1;
+
+            memcpy(dest + j, output, output_len);
+            j += output_len;
+            i = end;
+        }
+        else
+        {
+            dest[j++] = src[i++];
+        }
+    }
+
+    dest[j] = '\0';
+    return src[i] == '\0' ? 0 : -1; /* Destination filled before source ended */
+}
+
 void execute_command(void)
 {
     input[input_length] = '\0';
@@ -1440,8 +1508,22 @@ void execute_command(void)
     input_length = 0;
     input[0] = '\0';
 
+    // char expanded[INPUT_SIZE];
+    // expand_variables(command, expanded, sizeof(expanded), active_tab);
+    // strcpy(command, expanded);
+
+    char substituted[INPUT_SIZE];
+    if (expand_command_substitutions(
+            command, substituted, sizeof(substituted), tab) != 0)
+    {
+        append_output("terminator: invalid or oversized command substitution\n",
+                      52);
+        gui_draw();
+        return;
+    }
+
     char expanded[INPUT_SIZE];
-    expand_variables(command, expanded, sizeof(expanded), active_tab);
+    expand_variables(substituted, expanded, sizeof(expanded), active_tab);
     strcpy(command, expanded);
 
     if (handle_assignment(command, active_tab))
