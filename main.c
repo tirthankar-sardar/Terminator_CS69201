@@ -573,7 +573,8 @@ int main(void)
 
         else if (event.type == ButtonPress)
         {
-            gui_handle_button(&event.xbutton);
+            if (!handle_scroll_event(&event))
+                gui_handle_button(&event.xbutton);
         }
     }
 
@@ -994,7 +995,8 @@ int main(void)
                 }
                 else if (event.type == ButtonPress)
                 {
-                    gui_handle_button(&event.xbutton);
+                    if (!handle_scroll_event(&event))
+                        gui_handle_button(&event.xbutton);
                 }
             }
         }
