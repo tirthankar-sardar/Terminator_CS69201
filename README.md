@@ -246,25 +246,13 @@ The project is organized into modular C source and header files.
 - **Make** — Build automation.
 - **Unix process management** — Foreground/background execution and job control.
 
-## 9. Learning Objectives
+## 9. Authors and Contributions
 
-This project explores practical operating system concepts, including:
-
-- Process creation and execution.
-- Inter-process communication using pipes.
-- File descriptor manipulation.
-- Input/output redirection.
-- Signal handling and process groups.
-- Job control and process synchronization.
-- Event-driven graphical programming.
-- Modular systems programming in C.
-
-## 10. Authors and Contributions
-
-This project was developed as part of an operating systems / systems programming project.
+This project was developed as part of an Computing Lab Term project.
 
 Contributions include the implementation of the graphical terminal interface, shell functionality, process management, command execution, and additional terminal features.
 
 ---
 
 **Terminator — A custom terminal emulator and shell built from scratch in C.**
+**Author - Tirthankar Sardar (26CS60R06)**
