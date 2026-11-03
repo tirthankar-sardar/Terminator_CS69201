@@ -253,6 +253,4 @@ This project was developed as part of an Computing Lab Term project.
 Contributions include the implementation of the graphical terminal interface, shell functionality, process management, command execution, and additional terminal features.
 
 ---
-
-**Terminator — A custom terminal emulator and shell built from scratch in C.**
 **Author - Tirthankar Sardar (26CS60R06)**
