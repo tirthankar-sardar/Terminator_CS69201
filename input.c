@@ -673,13 +673,13 @@ void handle_keypress(XKeyEvent *event)
         return;
     }
 
-    /* Ctrl+D: delete at cursor, or exit at an empty prompt. */
+    /* Ctrl+D: delete at cursor, or close the active tab at an empty prompt. */
     if ((event->state & ControlMask) &&
         (raw_key == XK_d || raw_key == XK_D))
     {
         if (input_length == 0)
         {
-            running = 0;
+            gui_close_tab();
         }
         else if (input_cursor < input_length)
         {
